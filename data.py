@@ -14,6 +14,7 @@ class Data:
         receivers: OptTensor = None,
         edge_attr: OptTensor = None,
         y: OptTensor = None,
+        glob: OptTensor = None,
         **kwargs,
     ):
         super().__init__()
@@ -22,6 +23,7 @@ class Data:
         self._receivers = receivers
         self._edge_attr = edge_attr
         self._y = y
+        self.glob = glob
 
     @property
     def x(self) -> jnp.ndarray:
@@ -55,16 +57,16 @@ class Data:
         return info
 
 
-class Batch:
+class Batch(Data):
     def __init__(self, graphs: List[Data] = None):
 
         super().__init__()
 
         self.x = jnp.concatenate([g.x for g in graphs], axis=0)
-        # senders = [g.senders for g in graphs]
-        # receivers = [g.receivers for g in graphs]
-        # edge_attr = [g.edge_attr for g in graphs]
-        # y = [g.y for g in graphs]
+        self.senders = jnp.concatenate([g.senders for g in graphs], axis=-1)
+        self.receivers = jnp.concatenate([g.receivers for g in graphs], axis=-1)
+        self.edge_attr = jnp.concatenate([g.edge_attr for g in graphs], axis=0)
+        self.y = [g.y for g in graphs]
 
 
 if __name__ == "__main__":
