@@ -3,8 +3,7 @@ import jax.numpy as jnp
 import jax.tree_util as tree
 
 from data import Data
-from gnn import GCNConv
-from ops import segment_sum
+from gnn import GCNConv, GCNLayer
 import numpy as np
 
 
@@ -44,9 +43,19 @@ def get_gcnconv():
         symmetric_normalization=True,
     )
 
+def get_gcnlayer():
+    return GCNLayer(input_dim=4, output_dim=32, aggregate_nodes_fn="sum")
+
+
 
 if __name__ == "__main__":
     graph = _get_random_graph()
-    apply_fn = get_gcnconv()
-    print(apply_fn)
-    print(apply_fn(graph))
+    # apply_fn = get_gcnconv()
+    # print(apply_fn)
+    # print(apply_fn(graph))
+
+    layer = get_gcnlayer()
+    params = layer.init(jax.random.PRNGKey(0), graph)
+    
+    out_graph = layer.apply(params, graph)
+    print(out_graph.shape)

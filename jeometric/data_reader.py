@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from data import Data
 
-from util import batch
+from jeometric.util import batch
 
 
 class DataReader:

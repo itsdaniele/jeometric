@@ -1,6 +1,8 @@
-from typing import Any, NamedTuple, Iterable, Mapping, Union, Optional, List
+from typing import Any, NamedTuple, Iterable, Mapping, Union, Optional, List, Sequence
 import jax.numpy as jnp
 import jax
+
+import jax.tree_util as tree
 
 
 OptTensor = Optional[jnp.ndarray]
@@ -28,6 +30,10 @@ class Data:
     @property
     def x(self) -> jnp.ndarray:
         return self._x
+
+    @x.setter
+    def x(self, x):
+        self._x = x
 
     @property
     def y(self) -> jnp.ndarray:
@@ -58,15 +64,31 @@ class Data:
 
 
 class Batch(Data):
-    def __init__(self, graphs: List[Data] = None):
+
+    def _batch(self, graphs):
+        """Returns batched graph given a list of graphs and a numpy-like module."""
+        # Calculates offsets for sender and receiver arrays, caused by concatenating
+        # the nodes arrays.
+        offsets = jnp.cumsum(
+            jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]]))
+
+        def _map_concat(nests):
+            concat = lambda *args: jnp.concatenate(args)
+            return tree.tree_map(concat, *nests)
+
+        
+        self.x=_map_concat([g.x for g in graphs]),
+        self.edge_attr=_map_concat([g.edge_attr for g in graphs]),
+        self.glob=_map_concat([g.glob for g in graphs]),
+        self.senders=jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)]),
+        self.receivers=jnp.concatenate(
+            [g.receivers + o for g, o in zip(graphs, offsets)])
+        self.batch = offsets
+    
+    def __init__(self, graphs: Sequence[Data] = None):
 
         super().__init__()
-
-        self.x = jnp.concatenate([g.x for g in graphs], axis=0)
-        self.senders = jnp.concatenate([g.senders for g in graphs], axis=-1)
-        self.receivers = jnp.concatenate([g.receivers for g in graphs], axis=-1)
-        self.edge_attr = jnp.concatenate([g.edge_attr for g in graphs], axis=0)
-        self.y = [g.y for g in graphs]
+        self._batch(graphs)
 
 
 if __name__ == "__main__":

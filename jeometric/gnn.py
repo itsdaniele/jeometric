@@ -7,6 +7,9 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Union, Dict
 from ops import segment_sum
 from data import Data
 
+from flax import linen as nn
+
+
 NodeFeatures = EdgeFeatures = Globals = jnp.ndarray
 AggregateEdgesToNodesFn = Callable[[EdgeFeatures, jnp.ndarray, int], NodeFeatures]
 
@@ -81,8 +84,35 @@ def GCNConv(
                 x,
             )
             # pylint: enable=g-long-lambda
-        graph._x = nodes
-        return graph
+       #graph._x = nodes
+        return nodes
 
     return _ApplyGCN
 
+
+class GCNLayer(nn.Module):
+    input_dim: int
+    output_dim: int
+    aggregate_nodes_fn: str = "sum"
+    add_self_edges: bool = False
+    symmetric_normalization: bool = True
+
+    @nn.compact
+    def __call__(self, graph: Data) -> Data:
+        # Define the weight matrix as a parameter of the layer.
+        weight = self.param('weight', nn.initializers.xavier_uniform(), (self.input_dim, self.output_dim))
+        bias = self.param('bias', nn.initializers.zeros, (self.output_dim,))
+
+        # Define an update function that applies the weight matrix to node features.
+        def update_node_fn(node_features):
+            return jnp.dot(node_features, weight) + bias
+
+        # Create a GCN convolution with the update function.
+        gcn_conv = GCNConv(
+            update_node_fn=update_node_fn,
+            aggregate_nodes_fn=self.aggregate_nodes_fn,
+            add_self_edges=self.add_self_edges,
+            symmetric_normalization=self.symmetric_normalization
+        )
+        
+        return gcn_conv(graph)
