@@ -2,10 +2,10 @@ import jax.numpy as jnp
 import jax.tree_util as tree
 import jax
 
-from typing import Any, Callable, Iterable, Mapping, Optional, Union, Dict
+from typing import Callable, Dict
 
-from ops import segment_sum
-from data import Data
+from jeometric.ops import segment_sum
+from jeometric.data import Data
 
 from flax import linen as nn
 
@@ -16,19 +16,20 @@ AggregateEdgesToNodesFn = Callable[[EdgeFeatures, jnp.ndarray, int], NodeFeature
 aggregate_fn_dict: Dict[str, AggregateEdgesToNodesFn] = {"sum": segment_sum}
 
 
-def GCNConv(
+def gcn_conv(
     update_node_fn: Callable[[NodeFeatures], NodeFeatures],
     aggregate_nodes_fn: str = "sum",
     add_self_edges: bool = False,
     symmetric_normalization: bool = True,
 ):
-
+    """
+    The Graph Convolutional Network operator, from ().
+    """
     assert aggregate_nodes_fn in aggregate_fn_dict
     aggregate_nodes_fn = aggregate_fn_dict[aggregate_nodes_fn]
 
-    def _ApplyGCN(graph: Data):
-
-        x = update_node_fn(graph.x)
+    def _apply(x: jnp.array, senders: jnp.array, receivers: jnp.array, n_node: int):
+        x = update_node_fn(x)
         total_num_nodes = tree.tree_leaves(x)[0].shape[0]
 
         if add_self_edges:
@@ -38,20 +39,20 @@ def GCNConv(
             # this case it is not required since a GCN is agnostic to whether
             # the `GraphsTuple` is a batch of graphs or a single large graph.
             conv_receivers = jnp.concatenate(
-                (graph.receivers, jnp.arange(total_num_nodes)), axis=0
+                (receivers, jnp.arange(total_num_nodes)), axis=0
             )
             conv_senders = jnp.concatenate(
-                (graph.senders, jnp.arange(total_num_nodes)), axis=0
+                (senders, jnp.arange(total_num_nodes)), axis=0
             )
         else:
-            conv_senders = graph.senders
-            conv_receivers = graph.receivers
+            conv_senders = senders
+            conv_receivers = receivers
 
         if symmetric_normalization:
             # Calculate the normalization values.
-            count_edges = lambda x: segment_sum(
-                jnp.ones_like(conv_senders), x, total_num_nodes
-            )
+            def count_edges(x):
+                return segment_sum(jnp.ones_like(conv_senders), x, total_num_nodes)
+
             sender_degree = count_edges(conv_senders)
             receiver_degree = count_edges(conv_receivers)
 
@@ -83,11 +84,9 @@ def GCNConv(
                 ),
                 x,
             )
-            # pylint: enable=g-long-lambda
-       #graph._x = nodes
         return nodes
 
-    return _ApplyGCN
+    return _apply
 
 
 class GCNLayer(nn.Module):
@@ -98,21 +97,24 @@ class GCNLayer(nn.Module):
     symmetric_normalization: bool = True
 
     @nn.compact
-    def __call__(self, graph: Data) -> Data:
-        # Define the weight matrix as a parameter of the layer.
-        weight = self.param('weight', nn.initializers.xavier_uniform(), (self.input_dim, self.output_dim))
-        bias = self.param('bias', nn.initializers.zeros, (self.output_dim,))
+    def __call__(
+        self, x: jnp.array, senders: jnp.array, receivers: jnp.array, n_node: int
+    ) -> jnp.array:
+        weight = self.param(
+            "weight",
+            nn.initializers.xavier_uniform(),
+            (self.input_dim, self.output_dim),
+        )
+        bias = self.param("bias", nn.initializers.zeros, (self.output_dim,))
 
-        # Define an update function that applies the weight matrix to node features.
         def update_node_fn(node_features):
             return jnp.dot(node_features, weight) + bias
 
-        # Create a GCN convolution with the update function.
-        gcn_conv = GCNConv(
+        _gcn_conv = gcn_conv(
             update_node_fn=update_node_fn,
             aggregate_nodes_fn=self.aggregate_nodes_fn,
             add_self_edges=self.add_self_edges,
-            symmetric_normalization=self.symmetric_normalization
+            symmetric_normalization=self.symmetric_normalization,
         )
-        
-        return gcn_conv(graph)
+
+        return _gcn_conv(x, senders, receivers, n_node)

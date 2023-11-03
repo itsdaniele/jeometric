@@ -1,9 +1,8 @@
-from typing import Any, NamedTuple, Iterable, Mapping, Union, Optional, List, Sequence
+from typing import Optional, Sequence
 import jax.numpy as jnp
 import jax
 
 import jax.tree_util as tree
-
 
 OptTensor = Optional[jnp.ndarray]
 
@@ -43,6 +42,10 @@ class Data:
     def edge_attr(self) -> jnp.ndarray:
         return self._edge_attr
 
+    @edge_attr.setter
+    def edge_attr(self, edge_attr: jnp.ndarray):
+        self._edge_attr = edge_attr
+
     @property
     def senders(self) -> jnp.ndarray:
         return self._senders
@@ -50,6 +53,14 @@ class Data:
     @property
     def receivers(self) -> jnp.ndarray:
         return self._receivers
+
+    @senders.setter
+    def senders(self, senders: jnp.ndarray):
+        self._senders = senders
+
+    @receivers.setter
+    def receivers(self, receivers: jnp.ndarray):
+        self._receivers = receivers
 
     @property
     def num_nodes(self) -> int:
@@ -59,40 +70,48 @@ class Data:
         info = f"num_nodes: {self.num_nodes}"
         info += " | "
         info += f"x: {self.x.shape}"
-
         return info
 
 
 class Batch(Data):
-
     def _batch(self, graphs):
         """Returns batched graph given a list of graphs and a numpy-like module."""
         # Calculates offsets for sender and receiver arrays, caused by concatenating
         # the nodes arrays.
         offsets = jnp.cumsum(
-            jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]]))
+            jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]])
+        )
 
         def _map_concat(nests):
-            concat = lambda *args: jnp.concatenate(args)
+            def concat(*args):
+                return jnp.concatenate(args)
+
             return tree.tree_map(concat, *nests)
 
-        
-        self.x=_map_concat([g.x for g in graphs]),
-        self.edge_attr=_map_concat([g.edge_attr for g in graphs]),
-        self.glob=_map_concat([g.glob for g in graphs]),
-        self.senders=jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)]),
-        self.receivers=jnp.concatenate(
-            [g.receivers + o for g, o in zip(graphs, offsets)])
-        self.batch = offsets
-    
-    def __init__(self, graphs: Sequence[Data] = None):
+        self.x = _map_concat([g.x for g in graphs])
+        self.edge_attr = _map_concat([g.edge_attr for g in graphs])
+        self.glob = _map_concat([g.glob for g in graphs])
+        self.senders = jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)])
 
+        self.receivers = jnp.concatenate(
+            [g.receivers + o for g, o in zip(graphs, offsets)]
+        )
+
+        # self.batch should contain indices that map nodes to graph indices. They should be integers.
+        self.batch = jnp.concatenate(
+            [jnp.ones(g.num_nodes, dtype=jnp.int32) * i for i, g in enumerate(graphs)]
+        )
+
+    def __init__(self, graphs: Sequence[Data] = None):
         super().__init__()
         self._batch(graphs)
 
+    @property
+    def num_graphs(self):
+        return max(self.batch) + 1
+
 
 if __name__ == "__main__":
-
     seed = 42
     key = jax.random.PRNGKey(seed)
     x = jax.random.normal(key, shape=(10, 100))
@@ -108,4 +127,3 @@ if __name__ == "__main__":
     batch = Batch([graph, graph2])
 
     print(graph)
-

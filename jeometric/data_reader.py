@@ -1,13 +1,17 @@
 import pathlib
 import numpy as np
 import pandas as pd
-from data import Data
+from jeometric.data import Data
 
 from jeometric.util import batch
 
 
 class DataReader:
-    """Data Reader for Open Graph Benchmark datasets."""
+    """
+    Data Reader for Open Graph Benchmark datasets.
+
+    Adapted from https://github.com/google-deepmind/jraph/blob/master/jraph/ogb_examples/data_utils.py
+    """
 
     def __init__(
         self,
@@ -63,14 +67,16 @@ class DataReader:
         self._max_edges = int(np.max(self._n_edge))
 
         if dynamically_batch:
-            self._generator = jraph.dynamically_batch(
-                self._generator,
-                # Plus one for the extra padding node.
-                n_node=self._batch_size * (self._max_nodes) + 1,
-                # Times two because we want backwards edges.
-                n_edge=self._batch_size * (self._max_edges) * 2,
-                n_graph=self._batch_size + 1,
-            )
+            # self._generator = jraph.dynamically_batch(
+            #     self._generator,
+            #     # Plus one for the extra padding node.
+            #     n_node=self._batch_size * (self._max_nodes) + 1,
+            #     # Times two because we want backwards edges.
+            #     n_edge=self._batch_size * (self._max_edges) * 2,
+            #     n_graph=self._batch_size + 1,
+            # )
+
+            raise NotImplementedError("Dynamically batching not implemented yet.")
 
         # If n_node = [1,2,3], we create accumulated n_node [0,1,3,6] for indexing.
         self._accumulated_n_nodes = np.concatenate(
@@ -109,8 +115,8 @@ class DataReader:
         """Gets a graph by an integer index."""
         # Gather the graph information
         label = self._labels[idx]
-        n_node = self._n_node[idx]
-        n_edge = self._n_edge[idx]
+        # n_node = self._n_node[idx]
+        # n_edge = self._n_edge[idx]
         node_slice = slice(
             self._accumulated_n_nodes[idx], self._accumulated_n_nodes[idx + 1]
         )
@@ -151,17 +157,25 @@ class DataReader:
             yield graph
 
 
-
 if __name__ == "__main__":
-
-    path = "./test_data"
+    path = "/Users/danielepaliotta/Desktop/phd/projects/jax-geometric/jeometric/jeometric/ogbg-molhiv"
     reader = DataReader(
-      data_path=path,
-      master_csv_path=path+"/master.csv",
-      split_path=path+"/train.csv.gz",
-      batch_size=32)
-    
+        data_path=path,
+        master_csv_path=path + "/master.csv",
+        split_path=path + "/train.csv.gz",
+        batch_size=32,
+    )
 
-    reader.repeat()
+    # reader.repeat()
+    print(reader.total_num_graphs)
+    print(next(iter(reader)))
+
+    reader_test = DataReader(
+        data_path=path,
+        master_csv_path=path + "/master.csv",
+        split_path=path + "/test.csv.gz",
+        batch_size=32,
+    )
+
     print(reader.total_num_graphs)
     print(next(iter(reader)))
