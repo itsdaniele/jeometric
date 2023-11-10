@@ -6,6 +6,9 @@ from jeometric.data import Data, Batch
 
 from typing import Sequence
 
+import jax
+import numpy as np
+
 
 def batch(graphs: Sequence[Data]) -> Data:
     """Returns a batched graph given a list of graphs.
@@ -84,3 +87,84 @@ def _batch(graphs, np_):
     # )
 
     return Batch(graphs)
+
+
+def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -> Batch:
+    """Pads a ``GraphsTuple`` to size by adding computation preserving graphs.
+
+    The ``GraphsTuple`` is padded by first adding a dummy graph which contains the
+    padding nodes and edges, and then empty graphs without nodes or edges.
+
+    The empty graphs and the dummy graph do not interfer with the graphnet
+    calculations on the original graph, and so are computation preserving.
+
+    The padding graph requires at least one node and one graph.
+
+    This function does not support jax.jit, because the shape of the output
+    is data-dependent.
+
+    Args:
+      graph: ``GraphsTuple`` padded with dummy graph and empty graphs.
+      n_node: the number of nodes in the padded ``GraphsTuple``.
+      n_edge: the number of edges in the padded ``GraphsTuple``.
+      n_graph: the number of graphs in the padded ``GraphsTuple``. Default is 2,
+        which is the lowest possible value, because we always have at least one
+        graph in the original ``GraphsTuple`` and we need one dummy graph for the
+        padding.
+
+    Raises:
+      ValueError: if the passed ``n_graph`` is smaller than 2.
+      RuntimeError: if the given ``GraphsTuple`` is too large for the given
+        padding.
+
+    Returns:
+      A padded ``GraphsTuple``.
+    """
+
+    assert type(graphs) == Batch, "graphs must be a Batch object"
+    if n_graph < 2:
+        raise ValueError(
+            f"n_graph is {n_graph}, which is smaller than minimum value of 2."
+        )
+    graph = jax.device_get(graphs)
+    pad_n_node = int(n_node - np.sum(graph.n_node))
+    pad_n_edge = int(n_edge - np.sum(graph.n_edge))
+    pad_n_graph = int(n_graph - graph.n_node.shape[0])
+    if pad_n_node <= 0 or pad_n_edge < 0 or pad_n_graph <= 0:
+        raise RuntimeError(
+            "Given graph is too large for the given padding. difference: "
+            f"n_node {pad_n_node}, n_edge {pad_n_edge}, n_graph {pad_n_graph}"
+        )
+
+    pad_n_empty_graph = pad_n_graph - 1
+
+    tree_nodes_pad = lambda leaf: np.zeros(
+        (pad_n_node,) + leaf.shape[1:], dtype=leaf.dtype
+    )
+    tree_edges_pad = lambda leaf: np.zeros(
+        (pad_n_edge,) + leaf.shape[1:], dtype=leaf.dtype
+    )
+    tree_globs_pad = lambda leaf: np.zeros(
+        (pad_n_graph,) + leaf.shape[1:], dtype=leaf.dtype
+    )
+
+    padding_graph = gn_graph.GraphsTuple(
+        n_node=np.concatenate(
+            [
+                np.array([pad_n_node], dtype=np.int32),
+                np.zeros(pad_n_empty_graph, dtype=np.int32),
+            ]
+        ),
+        n_edge=np.concatenate(
+            [
+                np.array([pad_n_edge], dtype=np.int32),
+                np.zeros(pad_n_empty_graph, dtype=np.int32),
+            ]
+        ),
+        nodes=tree.tree_map(tree_nodes_pad, graph.nodes),
+        edges=tree.tree_map(tree_edges_pad, graph.edges),
+        globals=tree.tree_map(tree_globs_pad, graph.globals),
+        senders=np.zeros(pad_n_edge, dtype=np.int32),
+        receivers=np.zeros(pad_n_edge, dtype=np.int32),
+    )
+    return _batch([graph, padding_graph], np_=np)

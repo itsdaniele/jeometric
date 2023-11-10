@@ -66,6 +66,13 @@ class Data:
     def num_nodes(self) -> int:
         return len(self._x)
 
+    def _tree_flatten(self):
+        return (self.x, self.senders, self.receivers, self.edge_attr, self.glob), None
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(*children)
+
     def __repr__(self) -> str:
         info = f"num_nodes: {self.num_nodes}"
         info += " | "
@@ -104,11 +111,19 @@ class Batch(Data):
 
     def __init__(self, graphs: Sequence[Data] = None):
         super().__init__()
+        # self.graphs = graphs
         self._batch(graphs)
+        self.num_graphs = self.compute_num_graphs()
 
-    @property
-    def num_graphs(self):
-        return max(self.batch) + 1
+    def _tree_flatten(self):
+        return (self.graphs), None
+
+    @classmethod
+    def _tree_unflatten(cls, aux_data, children):
+        return cls(children)
+
+    def compute_num_graphs(self):
+        return jnp.max(self.batch) + 1
 
 
 if __name__ == "__main__":

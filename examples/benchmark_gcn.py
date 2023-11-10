@@ -12,6 +12,8 @@ from flax import linen as nn
 
 import optax
 
+import time
+
 import functools
 
 
@@ -27,15 +29,8 @@ def compute_loss(params, graph, label, net, num_graphs):
     preds = jax.nn.log_softmax(pred_graph)
     targets = jax.nn.one_hot(label, 2)
 
-    # Since we have an extra 'dummy' graph in our batch due to padding, we want
-    # to mask out any loss associated with the dummy graph.
-    # Since we padded with `pad_with_graphs` we can recover the mask by using
-    # get_graph_padding_mask.
-    # mask = jraph.get_graph_padding_mask(pred_graph)
-
     # Cross entropy loss.
     loss = -jnp.sum(preds * targets) / num_graphs
-
     accuracy = jnp.mean(jnp.argmax(preds, axis=1) == label)
     return loss, accuracy
 
@@ -73,13 +68,6 @@ class GraphConvolutionalNetwork(nn.Module):
             symmetric_normalization=self.symmetric_normalization,
         )(x, senders, receivers, n_node)
 
-        # Global average pooling. Graphs are batched so need to use scatter_add and such.
-        # x = jax.ops.segment_sum(x, graph.batch, graph.num_graphs)  # TODO fix
-
-        ## the previous code doesn't work with jax.jit because of graph.num_graphs property. Fixing it with the following code
-        # x = jax.jit(jax.ops.segment_sum, static_argnums=(2,))(
-        #     x, graph.batch, graph.num_graphs
-        # )
         x = jax.ops.segment_sum(x, graph.batch, num_graphs)
 
         return x
@@ -100,25 +88,6 @@ gcn_model = GraphConvolutionalNetwork(
     symmetric_normalization=True,
 )
 
-# Initialize model parameters
-# key = jax.random.PRNGKey(0)
-# path = "/Users/danielepaliotta/Desktop/phd/projects/jax-geometric/jeometric/jeometric/ogbg-molhiv"
-# train_reader = DataReader(
-#     data_path=path,
-#     master_csv_path=path + "/master.csv",
-#     split_path=path + "/train.csv.gz",
-#     batch_size=32,
-# )
-
-# params = gcn_model.init(key, next(iter(train_reader)), 32)
-
-
-# for data in iter(train_reader):
-#     out = gcn_model.apply(params, data, )
-#     break
-
-
-## training loop
 
 # Initialize model parameters
 key = jax.random.PRNGKey(0)
@@ -137,60 +106,48 @@ optimizer = optax.adam(learning_rate=1e-3)
 optimizer_state = optimizer.init(params)
 
 
-def train_step(
-    params,
-    optimizer_state: optax.OptState,
-    batch: Data,
-):
-    """Train for a single step."""
-    # Compute loss and accuracy
-
+# JIT-compiled version of train_step
+def train_step_jit(params, optimizer_state: optax.OptState, batch: Data):
     compute_loss_fn = functools.partial(
         compute_loss, net=gcn_model, num_graphs=batch.num_graphs
     )
-
     compute_loss_fn = jax.jit(jax.value_and_grad(compute_loss_fn, has_aux=True))
-    # loss, accuracy = compute_loss(params, batch, batch.y, gcn_model)
-
-    # Compute gradients
     (loss, acc), grad = compute_loss_fn(params, batch, batch.glob["label"])
-    # Update parameters
     updates, optimizer_state = optimizer.update(grad, optimizer_state)
     params = optax.apply_updates(params, updates)
-
     return params, optimizer_state, loss, acc
 
 
-def evaluate(data_reader):
-    """Evaluate the model on the test set."""
-    loss = 0
-    accuracy = 0
-    num_batches = 0
-    for batch in iter(data_reader):
-        loss_, accuracy_ = compute_loss(params, batch, batch.glob["label"], gcn_model)
-        loss += loss_
-        accuracy += accuracy_
-        num_batches += 1
-    return loss / num_batches, accuracy / num_batches
+# Non-JIT version of train_step (essentially the same as your original function)
+def train_step_no_jit(params, optimizer_state: optax.OptState, batch: Data):
+    compute_loss_fn = functools.partial(
+        compute_loss, net=gcn_model, num_graphs=batch.num_graphs
+    )
+    compute_loss_fn = jax.value_and_grad(compute_loss_fn, has_aux=True)
+    (loss, acc), grad = compute_loss_fn(params, batch, batch.glob["label"])
+    updates, optimizer_state = optimizer.update(grad, optimizer_state)
+    params = optax.apply_updates(params, updates)
+    return params, optimizer_state, loss, acc
 
 
-test_reader = DataReader(
-    data_path=path,
-    master_csv_path=path + "/master.csv",
-    split_path=path + "/test.csv.gz",
-    batch_size=32,
-)
+# Benchmarking function
+def benchmark(train_step_fn, num_steps=100):
+    start_time = time.time()
+    for _ in range(num_steps):
+        batch = next(train_reader)
+        global params, optimizer_state  # Make sure to use the global variables
+        params, optimizer_state, _, _ = train_step_fn(params, optimizer_state, batch)
+    return time.time() - start_time
 
 
-train_reader.repeat()
-num_training_steps = 1000
-for idx in range(num_training_steps):
-    batch = next(train_reader)
-    params, optimizer_state, loss, accuracy = train_step(params, optimizer_state, batch)
-    if idx % 100 == 0:
-        print(f"step: {idx}, loss: {loss}, acc: {accuracy}")
+# Benchmark both versions
+jit_time = benchmark(train_step_jit)
+no_jit_time = benchmark(train_step_no_jit)
 
+print(f"JIT Time: {jit_time} seconds")
+print(f"Non-JIT Time: {no_jit_time} seconds")
 
-print("Evaluating...")
-test_loss, test_accuracy = evaluate(test_reader)
-print(f"Test loss {test_loss} | Test accuracy {test_accuracy}")
+"""
+JIT Time: 47.3715717792511 seconds
+Non-JIT Time: 71.37014412879944 seconds
+"""
