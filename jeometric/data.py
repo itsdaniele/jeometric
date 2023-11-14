@@ -8,6 +8,18 @@ OptTensor = Optional[jnp.ndarray]
 
 
 class Data:
+    """
+    Data class for graphs.
+
+    Args:
+        x: Node features.
+        senders: Indices of the sender nodes.
+        receivers: Indices of the receiver nodes.
+        edge_attr: Edge features.
+        y: Target values.
+        glob: Global features.
+    """
+
     def __init__(
         self,
         x: OptTensor = None,
@@ -23,7 +35,7 @@ class Data:
         self._senders = senders
         self._receivers = receivers
         self._edge_attr = edge_attr
-        self._y = y
+        self._y = y  # this is never used by the rest of the library for now.
         self.glob = glob
 
     @property
@@ -66,8 +78,19 @@ class Data:
     def num_nodes(self) -> int:
         return len(self._x)
 
+    @property
+    def num_edges(self) -> int:
+        return len(self._senders)
+
     def _tree_flatten(self):
-        return (self.x, self.senders, self.receivers, self.edge_attr, self.glob), None
+        return (
+            self.x,
+            self.senders,
+            self.receivers,
+            self.edge_attr,
+            None,
+            self.glob,
+        ), None
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
@@ -80,50 +103,100 @@ class Data:
         return info
 
 
+def _batch(graphs):
+    """Returns batched graph given a list of graphs and a numpy-like module."""
+    # Calculates offsets for sender and receiver arrays, caused by concatenating
+    # the nodes arrays.
+    offsets = jnp.cumsum(jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]]))
+
+    def _map_concat(nests):
+        def concat(*args):
+            return jnp.concatenate(args)
+
+        return tree.tree_map(concat, *nests)
+
+    x = _map_concat([g.x for g in graphs])
+    edge_attr = _map_concat([g.edge_attr for g in graphs])
+    glob = _map_concat([g.glob for g in graphs])
+    senders = jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)])
+
+    receivers = jnp.concatenate([g.receivers + o for g, o in zip(graphs, offsets)])
+
+    # self.batch should contain indices that map nodes to graph indices. They should be integers.
+    batch = jnp.concatenate(
+        [jnp.ones(g.num_nodes, dtype=jnp.int32) * i for i, g in enumerate(graphs)]
+    )
+
+    return x, senders, receivers, edge_attr, glob, batch
+
+
 class Batch(Data):
-    def _batch(self, graphs):
-        """Returns batched graph given a list of graphs and a numpy-like module."""
-        # Calculates offsets for sender and receiver arrays, caused by concatenating
+    def _add_to_batch(self, graph: Data):
+        """
+        Adds a single graph to the batch. updates the batch.batch vector accordingly.
+        """
+        # Calculate the offset for the sender and receiver arrays, caused by concatenating
         # the nodes arrays.
-        offsets = jnp.cumsum(
-            jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]])
+        offset = jnp.sum(self.x.shape[0])
+        self.x = jnp.concatenate([self.x, graph.x])
+        self.edge_attr = (
+            None
+            if self.edge_attr is None
+            else jnp.concatenate([self.edge_attr, graph.edge_attr])
+        )
+        # self.glob = None if self.glob is None else [self.glob] + [graph.glob]
+
+        # self.glob and graph.glob are dictionaries. create a dictionarity with same keys, and concatenation of the values.
+        self.glob = (
+            None
+            if self.glob is None
+            else {k: jnp.concatenate([v, graph.glob[k]]) for k, v in self.glob.items()}
         )
 
-        def _map_concat(nests):
-            def concat(*args):
-                return jnp.concatenate(args)
-
-            return tree.tree_map(concat, *nests)
-
-        self.x = _map_concat([g.x for g in graphs])
-        self.edge_attr = _map_concat([g.edge_attr for g in graphs])
-        self.glob = _map_concat([g.glob for g in graphs])
-        self.senders = jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)])
-
-        self.receivers = jnp.concatenate(
-            [g.receivers + o for g, o in zip(graphs, offsets)]
-        )
+        self.senders = jnp.concatenate([self.senders, graph.senders + offset])
+        self.receivers = jnp.concatenate([self.receivers, graph.receivers + offset])
 
         # self.batch should contain indices that map nodes to graph indices. They should be integers.
         self.batch = jnp.concatenate(
-            [jnp.ones(g.num_nodes, dtype=jnp.int32) * i for i, g in enumerate(graphs)]
+            [self.batch, jnp.ones(graph.num_nodes, dtype=jnp.int32) * self.num_graphs]
         )
 
-    def __init__(self, graphs: Sequence[Data] = None):
-        super().__init__()
-        # self.graphs = graphs
-        self._batch(graphs)
-        self.num_graphs = self.compute_num_graphs()
+        return self  # TODO fix
+
+    # provide an init with the same signature as Data plus the `batch` argument.
+    def __init__(self, x, senders, receivers, edge_attr, glob, batch, num_graphs):
+        super().__init__(x, senders, receivers, edge_attr, None, glob)  # TODO fix
+        self.batch = batch
+        self.num_graphs = num_graphs
+
+    @classmethod
+    def from_data_list(cls, graphs: Sequence[Data]):
+        x, senders, receivers, edge_attr, glob, batch = _batch(graphs)
+        return cls(x, senders, receivers, edge_attr, glob, batch, len(graphs))
 
     def _tree_flatten(self):
-        return (self.graphs), None
+        return (
+            self.x,
+            self.senders,
+            self.receivers,
+            self.edge_attr,
+            self.glob,
+            self.batch,
+            self.num_graphs,
+        ), None
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
-        return cls(children)
+        return cls(*children)
 
     def compute_num_graphs(self):
         return jnp.max(self.batch) + 1
+
+    def to_data_list(self):
+        """
+        Reconstruct the list of `Data` objects from the batch.
+        """
+        raise NotImplementedError("Not implemented yet.")
 
 
 if __name__ == "__main__":
@@ -139,6 +212,6 @@ if __name__ == "__main__":
     receivers2 = receivers.copy()
     graph2 = Data(x=x2, senders=senders2, receiver=receivers2)
 
-    batch = Batch([graph, graph2])
+    batch = Batch.from_data_list([graph, graph2])
 
     print(graph)

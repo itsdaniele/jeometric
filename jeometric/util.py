@@ -86,13 +86,13 @@ def _batch(graphs, np_):
     #     receivers=np_.concatenate([g.receivers + o for g, o in zip(graphs, offsets)]),
     # )
 
-    return Batch(graphs)
+    return Batch.from_data_list(graphs)
 
 
 def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -> Batch:
-    """Pads a ``GraphsTuple`` to size by adding computation preserving graphs.
+    """Pads a ``Batch`` to size by adding computation preserving graphs.
 
-    The ``GraphsTuple`` is padded by first adding a dummy graph which contains the
+    The ``Batch`` is padded by first adding a dummy graph which contains the
     padding nodes and edges, and then empty graphs without nodes or edges.
 
     The empty graphs and the dummy graph do not interfer with the graphnet
@@ -104,10 +104,10 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
     is data-dependent.
 
     Args:
-      graph: ``GraphsTuple`` padded with dummy graph and empty graphs.
-      n_node: the number of nodes in the padded ``GraphsTuple``.
-      n_edge: the number of edges in the padded ``GraphsTuple``.
-      n_graph: the number of graphs in the padded ``GraphsTuple``. Default is 2,
+      graph: ``Batch`` padded with dummy graph and empty graphs.
+      n_node: the number of nodes in the padded ``Batch``.
+      n_edge: the number of edges in the padded ``Batch``.
+      n_graph: the number of graphs in the padded ``Batch``. Default is 2,
         which is the lowest possible value, because we always have at least one
         graph in the original ``GraphsTuple`` and we need one dummy graph for the
         padding.
@@ -118,7 +118,7 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
         padding.
 
     Returns:
-      A padded ``GraphsTuple``.
+      A padded ``Batch``.
     """
 
     assert type(graphs) == Batch, "graphs must be a Batch object"
@@ -127,9 +127,12 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
             f"n_graph is {n_graph}, which is smaller than minimum value of 2."
         )
     graph = jax.device_get(graphs)
-    pad_n_node = int(n_node - np.sum(graph.n_node))
-    pad_n_edge = int(n_edge - np.sum(graph.n_edge))
-    pad_n_graph = int(n_graph - graph.n_node.shape[0])
+    graph.glob = graphs.glob
+    # device_get is not copyinng graphs.glob, which is a dict. Fix this.
+
+    pad_n_node = int(n_node - graph.num_nodes) - 1  # TODO why?
+    pad_n_edge = int(n_edge - graph.num_edges)
+    pad_n_graph = int(n_graph - graph.num_graphs)
     if pad_n_node <= 0 or pad_n_edge < 0 or pad_n_graph <= 0:
         raise RuntimeError(
             "Given graph is too large for the given padding. difference: "
@@ -138,33 +141,69 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
 
     pad_n_empty_graph = pad_n_graph - 1
 
-    tree_nodes_pad = lambda leaf: np.zeros(
-        (pad_n_node,) + leaf.shape[1:], dtype=leaf.dtype
-    )
-    tree_edges_pad = lambda leaf: np.zeros(
-        (pad_n_edge,) + leaf.shape[1:], dtype=leaf.dtype
-    )
-    tree_globs_pad = lambda leaf: np.zeros(
-        (pad_n_graph,) + leaf.shape[1:], dtype=leaf.dtype
+    def tree_nodes_pad(leaf):
+        return np.zeros((pad_n_node,) + leaf.shape[1:], dtype=leaf.dtype)
+
+    def tree_edges_pad(leaf):
+        return np.zeros((pad_n_edge,) + leaf.shape[1:], dtype=leaf.dtype)
+
+    # for globs, leaf is a dict. we want to create zero-value dicts with the same keys
+    def tree_globs_pad(leaf):
+        return np.zeros(1)
+
+    graph = Data(
+        x=tree.tree_map(tree_nodes_pad, graph.x),
+        edge_attr=tree.tree_map(tree_edges_pad, graph.edge_attr),
+        senders=jnp.zeros(pad_n_edge, dtype=jnp.int32),
+        receivers=jnp.zeros(pad_n_edge, dtype=jnp.int32),
+        glob=tree.tree_map(tree_globs_pad, graph.glob),
     )
 
-    padding_graph = gn_graph.GraphsTuple(
-        n_node=np.concatenate(
-            [
-                np.array([pad_n_node], dtype=np.int32),
-                np.zeros(pad_n_empty_graph, dtype=np.int32),
-            ]
-        ),
-        n_edge=np.concatenate(
-            [
-                np.array([pad_n_edge], dtype=np.int32),
-                np.zeros(pad_n_empty_graph, dtype=np.int32),
-            ]
-        ),
-        nodes=tree.tree_map(tree_nodes_pad, graph.nodes),
-        edges=tree.tree_map(tree_edges_pad, graph.edges),
-        globals=tree.tree_map(tree_globs_pad, graph.globals),
-        senders=np.zeros(pad_n_edge, dtype=np.int32),
-        receivers=np.zeros(pad_n_edge, dtype=np.int32),
-    )
-    return _batch([graph, padding_graph], np_=np)
+    batch = graphs._add_to_batch(graph)
+    batch.num_graphs = batch.compute_num_graphs()
+    return batch
+
+
+if __name__ == "__main__":
+
+    def _get_random_graph(max_n_graph=10):
+        n_graph = np.random.randint(1, max_n_graph + 1)
+        n_node = np.random.randint(0, 10, n_graph)
+        n_edge = np.random.randint(0, 20, n_graph)
+        # We cannot have any edges if there are no nodes.
+        n_edge[n_node == 0] = 0
+
+        senders = []
+        receivers = []
+        offset = 0
+        for n_node_in_graph, n_edge_in_graph in zip(n_node, n_edge):
+            if n_edge_in_graph != 0:
+                senders += list(
+                    np.random.randint(0, n_node_in_graph, n_edge_in_graph) + offset
+                )
+                receivers += list(
+                    np.random.randint(0, n_node_in_graph, n_edge_in_graph) + offset
+                )
+            offset += n_node_in_graph
+
+        return Data(
+            x=jnp.asarray(np.random.random(size=(np.sum(n_node), 4))),
+            edge_attr=jnp.asarray(np.random.random(size=(np.sum(n_edge), 3))),
+            senders=jnp.asarray(senders),
+            receivers=jnp.asarray(receivers),
+        )
+
+    graph1 = _get_random_graph()
+    graph2 = _get_random_graph()
+    graph3 = _get_random_graph()
+    batch = Batch([graph1, graph2])
+    # print(batch)
+    # batch._add_to_batch(graph3)
+    # print(graph3)
+    # print(batch)
+
+    print(batch)
+    print(batch.num_edges)
+    pad_with_graphs(batch, 100, 200, 3)
+    print(batch)
+    print(batch.num_edges)

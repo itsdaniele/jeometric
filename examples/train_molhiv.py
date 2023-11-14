@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from typing import List
 
 from jeometric.data import Data, Batch
+from jeometric.util import pad_with_graphs
 
 from flax import linen as nn
 
@@ -19,6 +20,42 @@ from jax import tree_util
 
 tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
 tree_util.register_pytree_node(Batch, Batch._tree_flatten, Batch._tree_unflatten)
+
+
+def _nearest_bigger_power_of_two(x: int) -> int:
+    """Computes the nearest power of two greater than x for padding."""
+    y = 2
+    while y < x:
+        y *= 2
+    return y
+
+
+def pad_graph_to_nearest_power_of_two(batch: Batch):
+    """Pads a batched `GraphsTuple` to the nearest power of two.
+
+    For example, if a `GraphsTuple` has 7 nodes, 5 edges and 3 graphs, this method
+    would pad the `GraphsTuple` nodes and edges:
+      7 nodes --> 8 nodes (2^3)
+      5 edges --> 8 edges (2^3)
+
+    And since padding is accomplished using `jraph.pad_with_graphs`, an extra
+    graph and node is added:
+      8 nodes --> 9 nodes
+      3 graphs --> 4 graphs
+
+    Args:
+      graphs_tuple: a batched `GraphsTuple` (can be batch size 1).
+
+    Returns:
+      A graphs_tuple batched to the nearest power of two.
+    """
+    # Add 1 since we need at least one padding node for pad_with_graphs.
+    pad_nodes_to = _nearest_bigger_power_of_two(batch.num_nodes) + 1
+    pad_edges_to = _nearest_bigger_power_of_two(batch.num_edges)
+    # Add 1 since we need at least one padding graph for pad_with_graphs.
+    # We do not pad to nearest power of two because the batch size is fixed.
+    pad_graphs_to = batch.num_graphs + 1
+    return pad_with_graphs(batch, pad_nodes_to, pad_edges_to, pad_graphs_to)
 
 
 def compute_loss(params, graph, label, net, num_graphs):
@@ -53,7 +90,6 @@ class GraphConvolutionalNetwork(nn.Module):
         x, senders, receivers = graph.x, graph.senders, graph.receivers
         n_node = graph.num_nodes
         current_input_dim = self.input_dim
-
         for dim in self.hidden_dims:
             x = GCNLayer(
                 input_dim=current_input_dim,
@@ -76,7 +112,7 @@ class GraphConvolutionalNetwork(nn.Module):
         # Global average pooling. Graphs are batched so need to use scatter_add and such.
         # x = jax.ops.segment_sum(x, graph.batch, graph.num_graphs)  # TODO fix
 
-        ## the previous code doesn't work with jax.jit because of graph.num_graphs property. Fixing it with the following code
+        # the previous code doesn't work with jax.jit because of graph.num_graphs property. Fixing it with the following code
         # x = jax.jit(jax.ops.segment_sum, static_argnums=(2,))(
         #     x, graph.batch, graph.num_graphs
         # )
@@ -118,7 +154,7 @@ gcn_model = GraphConvolutionalNetwork(
 #     break
 
 
-## training loop
+# training loop
 
 # Initialize model parameters
 key = jax.random.PRNGKey(0)
@@ -186,6 +222,7 @@ train_reader.repeat()
 num_training_steps = 1000
 for idx in range(num_training_steps):
     batch = next(train_reader)
+    batch = pad_graph_to_nearest_power_of_two(batch)
     params, optimizer_state, loss, accuracy = train_step(params, optimizer_state, batch)
     if idx % 100 == 0:
         print(f"step: {idx}, loss: {loss}, acc: {accuracy}")

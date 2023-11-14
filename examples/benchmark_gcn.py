@@ -19,8 +19,46 @@ import functools
 
 from jax import tree_util
 
-tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
+from jeometric.util import pad_with_graphs
+
+# tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
 tree_util.register_pytree_node(Batch, Batch._tree_flatten, Batch._tree_unflatten)
+
+
+def _nearest_bigger_power_of_two(x: int) -> int:
+    """Computes the nearest power of two greater than x for padding."""
+    y = 2
+    while y < x:
+        y *= 2
+    return y
+
+
+def pad_graph_to_nearest_power_of_two(batch: Batch):
+    """Pads a batched `GraphsTuple` to the nearest power of two.
+
+    For example, if a `GraphsTuple` has 7 nodes, 5 edges and 3 graphs, this method
+    would pad the `GraphsTuple` nodes and edges:
+      7 nodes --> 8 nodes (2^3)
+      5 edges --> 8 edges (2^3)
+
+    And since padding is accomplished using `jraph.pad_with_graphs`, an extra
+    graph and node is added:
+      8 nodes --> 9 nodes
+      3 graphs --> 4 graphs
+
+    Args:
+      graphs_tuple: a batched `GraphsTuple` (can be batch size 1).
+
+    Returns:
+      A graphs_tuple batched to the nearest power of two.
+    """
+    # Add 1 since we need at least one padding node for pad_with_graphs.
+    pad_nodes_to = _nearest_bigger_power_of_two(batch.num_nodes) + 1
+    pad_edges_to = _nearest_bigger_power_of_two(batch.num_edges)
+    # Add 1 since we need at least one padding graph for pad_with_graphs.
+    # We do not pad to nearest power of two because the batch size is fixed.
+    pad_graphs_to = batch.num_graphs + 1
+    return pad_with_graphs(batch, pad_nodes_to, pad_edges_to, pad_graphs_to)
 
 
 def compute_loss(params, graph, label, net, num_graphs):
@@ -29,8 +67,15 @@ def compute_loss(params, graph, label, net, num_graphs):
     preds = jax.nn.log_softmax(pred_graph)
     targets = jax.nn.one_hot(label, 2)
 
+    # Since we have an extra 'dummy' graph in our batch due to padding, we want
+    # to mask out any loss associated with the dummy graph.
+    # Since we padded with `pad_with_graphs` we can recover the mask by using
+    # get_graph_padding_mask.
+    # mask = jraph.get_graph_padding_mask(pred_graph)
+
     # Cross entropy loss.
     loss = -jnp.sum(preds * targets) / num_graphs
+
     accuracy = jnp.mean(jnp.argmax(preds, axis=1) == label)
     return loss, accuracy
 
@@ -108,6 +153,7 @@ optimizer_state = optimizer.init(params)
 
 # JIT-compiled version of train_step
 def train_step_jit(params, optimizer_state: optax.OptState, batch: Data):
+    batch = pad_graph_to_nearest_power_of_two(batch)
     compute_loss_fn = functools.partial(
         compute_loss, net=gcn_model, num_graphs=batch.num_graphs
     )
@@ -142,12 +188,17 @@ def benchmark(train_step_fn, num_steps=100):
 
 # Benchmark both versions
 jit_time = benchmark(train_step_jit)
-no_jit_time = benchmark(train_step_no_jit)
+# no_jit_time = benchmark(train_step_no_jit)
 
 print(f"JIT Time: {jit_time} seconds")
-print(f"Non-JIT Time: {no_jit_time} seconds")
+# print(f"Non-JIT Time: {no_jit_time} seconds")
 
 """
 JIT Time: 47.3715717792511 seconds
 Non-JIT Time: 71.37014412879944 seconds
+"""
+
+"""
+JIT Time after refactor and padding: ~40 seconds
+Non-JIT Time: ~69 seconds
 """
