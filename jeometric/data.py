@@ -103,8 +103,11 @@ class Data:
         return info
 
 
-def _batch(graphs):
-    """Returns batched graph given a list of graphs and a numpy-like module."""
+def _batch(graphs: Sequence[Data]):
+    """
+    Returns batched graph given a list of graphs.
+    Adapated from https://github.com/google-deepmind/jraph/blob/master/jraph/_src/utils.py#L424
+    """
     # Calculates offsets for sender and receiver arrays, caused by concatenating
     # the nodes arrays.
     offsets = jnp.cumsum(jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]]))
@@ -131,50 +134,55 @@ def _batch(graphs):
 
 
 class Batch(Data):
+
     def _add_to_batch(self, graph: Data):
         """
-        Adds a single graph to the batch. updates the batch.batch vector accordingly.
+        Returns a new Batch instance with the single graph added. Does not modify the current object.
         """
-        # Calculate the offset for the sender and receiver arrays, caused by concatenating
-        # the nodes arrays.
         offset = jnp.sum(self.x.shape[0])
-        self.x = jnp.concatenate([self.x, graph.x])
-        self.edge_attr = (
+        new_x = jnp.concatenate([self.x, graph.x])
+        new_edge_attr = (
             None
             if self.edge_attr is None
             else jnp.concatenate([self.edge_attr, graph.edge_attr])
         )
-        # self.glob = None if self.glob is None else [self.glob] + [graph.glob]
 
-        # self.glob and graph.glob are dictionaries. create a dictionarity with same keys, and concatenation of the values.
-        self.glob = (
+        new_glob = (
             None
             if self.glob is None
             else {k: jnp.concatenate([v, graph.glob[k]]) for k, v in self.glob.items()}
         )
 
-        self.senders = jnp.concatenate([self.senders, graph.senders + offset])
-        self.receivers = jnp.concatenate([self.receivers, graph.receivers + offset])
+        new_senders = jnp.concatenate([self.senders, graph.senders + offset])
+        new_receivers = jnp.concatenate([self.receivers, graph.receivers + offset])
 
-        # self.batch should contain indices that map nodes to graph indices. They should be integers.
-        self.batch = jnp.concatenate(
+        new_batch = jnp.concatenate(
             [self.batch, jnp.ones(graph.num_nodes, dtype=jnp.int32) * self.num_graphs]
         )
 
-        return self  # TODO fix
+        # Create a new Batch object with the updated values
+        new_batch_obj = Batch(new_x, new_senders, new_receivers, new_edge_attr, new_glob, new_batch)
+        return new_batch_obj
 
-    # provide an init with the same signature as Data plus the `batch` argument.
-    def __init__(self, x, senders, receivers, edge_attr, glob, batch, num_graphs):
+    def __init__(self, x, senders, receivers, edge_attr, glob, batch):
         super().__init__(x, senders, receivers, edge_attr, None, glob)  # TODO fix
         self.batch = batch
-        self.num_graphs = num_graphs
+
+        # When using jax.jit, `self.num_graphs` is treated as a dynamic value to trace. I think this is not optimal. 
+        self.num_graphs = self.compute_num_graphs() 
 
     @classmethod
     def from_data_list(cls, graphs: Sequence[Data]):
+        """
+        Returns a `Batch` instance from a list of `Data` instances.
+        """
         x, senders, receivers, edge_attr, glob, batch = _batch(graphs)
-        return cls(x, senders, receivers, edge_attr, glob, batch, len(graphs))
+        return cls(x, senders, receivers, edge_attr, glob, batch)
 
     def _tree_flatten(self):
+        """
+        This is needed to be able to use jax.jit.
+        """
         return (
             self.x,
             self.senders,
@@ -182,21 +190,17 @@ class Batch(Data):
             self.edge_attr,
             self.glob,
             self.batch,
-            self.num_graphs,
-        ), None
+            ), None
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):
+        """
+        This is needed to be able to use jax.jit.
+        """
         return cls(*children)
 
     def compute_num_graphs(self):
         return jnp.max(self.batch) + 1
-
-    def to_data_list(self):
-        """
-        Reconstruct the list of `Data` objects from the batch.
-        """
-        raise NotImplementedError("Not implemented yet.")
 
 
 if __name__ == "__main__":

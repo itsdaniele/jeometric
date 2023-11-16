@@ -11,6 +11,11 @@ def segment_sum(
     indices_are_sorted: bool = False,
     unique_indices: bool = False,
 ):
+    """
+    Alias to `jax.ops.segment_sum`.
+
+    From https://github.com/google-deepmind/jraph/blob/master/jraph/_src/utils.py#L424
+    """
     return jax.ops.segment_sum(
         data=data,
         segment_ids=segment_ids,

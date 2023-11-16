@@ -89,7 +89,7 @@ def _batch(graphs, np_):
     return Batch.from_data_list(graphs)
 
 
-def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -> Batch:
+def pad_with_graph(graphs: Batch, n_node: int, n_edge: int) -> Batch:
     """Pads a ``Batch`` to size by adding computation preserving graphs.
 
     The ``Batch`` is padded by first adding a dummy graph which contains the
@@ -122,15 +122,12 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
     """
 
     assert type(graphs) == Batch, "graphs must be a Batch object"
-    if n_graph < 2:
-        raise ValueError(
-            f"n_graph is {n_graph}, which is smaller than minimum value of 2."
-        )
+    n_graph = graphs.num_graphs + 1
     graph = jax.device_get(graphs)
     graph.glob = graphs.glob
-    # device_get is not copyinng graphs.glob, which is a dict. Fix this.
+    # TODO device_get is not copying graphs.glob, which is a dict. Fix this.
 
-    pad_n_node = int(n_node - graph.num_nodes) - 1  # TODO why?
+    pad_n_node = int(n_node - graph.num_nodes) 
     pad_n_edge = int(n_edge - graph.num_edges)
     pad_n_graph = int(n_graph - graph.num_graphs)
     if pad_n_node <= 0 or pad_n_edge < 0 or pad_n_graph <= 0:
@@ -138,8 +135,6 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
             "Given graph is too large for the given padding. difference: "
             f"n_node {pad_n_node}, n_edge {pad_n_edge}, n_graph {pad_n_graph}"
         )
-
-    pad_n_empty_graph = pad_n_graph - 1
 
     def tree_nodes_pad(leaf):
         return np.zeros((pad_n_node,) + leaf.shape[1:], dtype=leaf.dtype)
@@ -160,7 +155,6 @@ def pad_with_graphs(graphs: Batch, n_node: int, n_edge: int, n_graph: int = 2) -
     )
 
     batch = graphs._add_to_batch(graph)
-    batch.num_graphs = batch.compute_num_graphs()
     return batch
 
 

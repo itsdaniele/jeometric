@@ -23,7 +23,6 @@ def gcn_conv(
     symmetric_normalization: bool = True,
 ):
     """
-    The Graph Convolutional Network operator, from ().
     """
     assert aggregate_nodes_fn in aggregate_fn_dict
     aggregate_nodes_fn = aggregate_fn_dict[aggregate_nodes_fn]
@@ -90,6 +89,8 @@ def gcn_conv(
 
 
 class GCNLayer(nn.Module):
+    """
+    """
     input_dim: int
     output_dim: int
     aggregate_nodes_fn: str = "sum"

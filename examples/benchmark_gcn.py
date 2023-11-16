@@ -21,7 +21,7 @@ from jax import tree_util
 
 from jeometric.util import pad_with_graphs
 
-# tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
+tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
 tree_util.register_pytree_node(Batch, Batch._tree_flatten, Batch._tree_unflatten)
 
 
@@ -119,7 +119,7 @@ class GraphConvolutionalNetwork(nn.Module):
 
 
 # Example settings
-batch_size = 32
+batch_size = 1
 input_dim = 9
 hidden_dims = [64, 128]
 output_dim = 2
@@ -136,12 +136,12 @@ gcn_model = GraphConvolutionalNetwork(
 
 # Initialize model parameters
 key = jax.random.PRNGKey(0)
-path = "/Users/danielepaliotta/Desktop/phd/projects/jax-geometric/jeometric/jeometric/ogbg-molhiv"
+path = "/home/paliotta/jeometric/jeometric/ogbg-molhiv"
 train_reader = DataReader(
     data_path=path,
     master_csv_path=path + "/master.csv",
     split_path=path + "/train.csv.gz",
-    batch_size=32,
+    batch_size=1,
 )
 
 params = gcn_model.init(key, next(iter(train_reader)), 32)
@@ -176,8 +176,9 @@ def train_step_no_jit(params, optimizer_state: optax.OptState, batch: Data):
     return params, optimizer_state, loss, acc
 
 
+
 # Benchmarking function
-def benchmark(train_step_fn, num_steps=100):
+def benchmark(train_step_fn, num_steps=50):
     start_time = time.time()
     for _ in range(num_steps):
         batch = next(train_reader)
@@ -186,19 +187,26 @@ def benchmark(train_step_fn, num_steps=100):
     return time.time() - start_time
 
 
+
 # Benchmark both versions
 jit_time = benchmark(train_step_jit)
-# no_jit_time = benchmark(train_step_no_jit)
+no_jit_time = benchmark(train_step_no_jit)
 
 print(f"JIT Time: {jit_time} seconds")
-# print(f"Non-JIT Time: {no_jit_time} seconds")
+print(f"Non-JIT Time: {no_jit_time} seconds")
 
 """
-JIT Time: 47.3715717792511 seconds
-Non-JIT Time: 71.37014412879944 seconds
+CPU JIT Time: 47.3715717792511 seconds
+CPU Non-JIT Time: 71.37014412879944 seconds
 """
 
 """
-JIT Time after refactor and padding: ~40 seconds
-Non-JIT Time: ~69 seconds
+CPU JIT Time after refactor and padding: ~40 seconds
+CPU Non-JIT Time: ~69 seconds
+"""
+
+"""
+on GPU:
+JIT Time: 85.31780362129211 seconds
+Non-JIT Time: 175.50518012046814 seconds
 """

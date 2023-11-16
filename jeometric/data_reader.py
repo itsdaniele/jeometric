@@ -19,7 +19,6 @@ class DataReader:
         master_csv_path,
         split_path,
         batch_size=1,
-        dynamically_batch=False,
     ):
         """Initializes the data reader by loading in data."""
         with pathlib.Path(master_csv_path).open("rt") as fp:
@@ -66,18 +65,6 @@ class DataReader:
         self._max_nodes = int(np.max(self._n_node))
         self._max_edges = int(np.max(self._n_edge))
 
-        if dynamically_batch:
-            # self._generator = jraph.dynamically_batch(
-            #     self._generator,
-            #     # Plus one for the extra padding node.
-            #     n_node=self._batch_size * (self._max_nodes) + 1,
-            #     # Times two because we want backwards edges.
-            #     n_edge=self._batch_size * (self._max_edges) * 2,
-            #     n_graph=self._batch_size + 1,
-            # )
-
-            raise NotImplementedError("Dynamically batching not implemented yet.")
-
         # If n_node = [1,2,3], we create accumulated n_node [0,1,3,6] for indexing.
         self._accumulated_n_nodes = np.concatenate(
             (np.array([0]), np.cumsum(self._n_node))
@@ -86,7 +73,6 @@ class DataReader:
         self._accumulated_n_edges = np.concatenate(
             (np.array([0]), np.cumsum(self._n_edge))
         )
-        self._dynamically_batch = dynamically_batch
 
     @property
     def total_num_graphs(self):
@@ -100,16 +86,10 @@ class DataReader:
 
     def __next__(self):
         graphs = []
-        if self._dynamically_batch:
-            # If we are using pmap we need each batch to have the same size in both
-            # number of nodes and number of edges. So we use dynamically batch which
-            # guarantees this.
-            return next(self._generator)
-        else:
-            for _ in range(self._batch_size):
-                graph = next(self._generator)
-                graphs.append(graph)
-            return batch(graphs)
+        for _ in range(self._batch_size):
+            graph = next(self._generator)
+            graphs.append(graph)
+        return batch(graphs)
 
     def get_graph_by_idx(self, idx):
         """Gets a graph by an integer index."""

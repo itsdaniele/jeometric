@@ -14,13 +14,10 @@ from flax import linen as nn
 import optax
 
 import functools
-
-
 from jax import tree_util
 
 tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
 tree_util.register_pytree_node(Batch, Batch._tree_flatten, Batch._tree_unflatten)
-
 
 def _nearest_bigger_power_of_two(x: int) -> int:
     """Computes the nearest power of two greater than x for padding."""
@@ -72,7 +69,6 @@ def compute_loss(params, graph, label, net, num_graphs):
 
     # Cross entropy loss.
     loss = -jnp.sum(preds * targets) / num_graphs
-
     accuracy = jnp.mean(jnp.argmax(preds, axis=1) == label)
     return loss, accuracy
 
@@ -122,7 +118,7 @@ class GraphConvolutionalNetwork(nn.Module):
 
 
 # Example settings
-batch_size = 32
+batch_size = 1
 input_dim = 9
 hidden_dims = [64, 128]
 output_dim = 2
@@ -137,28 +133,8 @@ gcn_model = GraphConvolutionalNetwork(
 )
 
 # Initialize model parameters
-# key = jax.random.PRNGKey(0)
-# path = "/Users/danielepaliotta/Desktop/phd/projects/jax-geometric/jeometric/jeometric/ogbg-molhiv"
-# train_reader = DataReader(
-#     data_path=path,
-#     master_csv_path=path + "/master.csv",
-#     split_path=path + "/train.csv.gz",
-#     batch_size=32,
-# )
-
-# params = gcn_model.init(key, next(iter(train_reader)), 32)
-
-
-# for data in iter(train_reader):
-#     out = gcn_model.apply(params, data, )
-#     break
-
-
-# training loop
-
-# Initialize model parameters
 key = jax.random.PRNGKey(0)
-path = "/Users/danielepaliotta/Desktop/phd/projects/jax-geometric/jeometric/jeometric/ogbg-molhiv"
+path = "/home/paliotta/jeometric/jeometric/ogbg-molhiv"
 train_reader = DataReader(
     data_path=path,
     master_csv_path=path + "/master.csv",
@@ -179,21 +155,14 @@ def train_step(
     batch: Data,
 ):
     """Train for a single step."""
-    # Compute loss and accuracy
-
+    
     compute_loss_fn = functools.partial(
         compute_loss, net=gcn_model, num_graphs=batch.num_graphs
     )
-
     compute_loss_fn = jax.jit(jax.value_and_grad(compute_loss_fn, has_aux=True))
-    # loss, accuracy = compute_loss(params, batch, batch.y, gcn_model)
-
-    # Compute gradients
     (loss, acc), grad = compute_loss_fn(params, batch, batch.glob["label"])
-    # Update parameters
     updates, optimizer_state = optimizer.update(grad, optimizer_state)
     params = optax.apply_updates(params, updates)
-
     return params, optimizer_state, loss, acc
 
 
@@ -214,7 +183,7 @@ test_reader = DataReader(
     data_path=path,
     master_csv_path=path + "/master.csv",
     split_path=path + "/test.csv.gz",
-    batch_size=32,
+    batch_size=1,
 )
 
 
