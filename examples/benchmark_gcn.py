@@ -1,25 +1,20 @@
-from jeometric.gnn import GCNLayer
-from jeometric.data_reader import DataReader
+from typing import List
+import time
+import functools
 
 import jax
 import jax.numpy as jnp
-
-from typing import List
-
-from jeometric.data import Data, Batch
-
-from flax import linen as nn
+from jax import tree_util
 
 import optax
 
-import time
+from flax import linen as nn
 
-import functools
+from jeometric.data import Data, Batch
+from jeometric.gnn import GCNLayer
+from jeometric.data_reader import DataReader
+from jeometric.util import pad_with_graph, get_graph_padding_mask
 
-
-from jax import tree_util
-
-from jeometric.util import pad_with_graphs
 
 tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
 tree_util.register_pytree_node(Batch, Batch._tree_flatten, Batch._tree_unflatten)
@@ -57,8 +52,8 @@ def pad_graph_to_nearest_power_of_two(batch: Batch):
     pad_edges_to = _nearest_bigger_power_of_two(batch.num_edges)
     # Add 1 since we need at least one padding graph for pad_with_graphs.
     # We do not pad to nearest power of two because the batch size is fixed.
-    pad_graphs_to = batch.num_graphs + 1
-    return pad_with_graphs(batch, pad_nodes_to, pad_edges_to, pad_graphs_to)
+    # pad_graphs_to = batch.num_graphs + 1
+    return pad_with_graph(batch, pad_nodes_to, pad_edges_to)
 
 
 def compute_loss(params, graph, label, net, num_graphs):
@@ -71,10 +66,10 @@ def compute_loss(params, graph, label, net, num_graphs):
     # to mask out any loss associated with the dummy graph.
     # Since we padded with `pad_with_graphs` we can recover the mask by using
     # get_graph_padding_mask.
-    # mask = jraph.get_graph_padding_mask(pred_graph)
+    mask = get_graph_padding_mask(pred_graph, num_graphs)
 
     # Cross entropy loss.
-    loss = -jnp.sum(preds * targets) / num_graphs
+    loss = -jnp.sum(preds * targets * mask[:, None]) / num_graphs
 
     accuracy = jnp.mean(jnp.argmax(preds, axis=1) == label)
     return loss, accuracy
@@ -153,7 +148,7 @@ optimizer_state = optimizer.init(params)
 
 # JIT-compiled version of train_step
 def train_step_jit(params, optimizer_state: optax.OptState, batch: Data):
-    batch = pad_graph_to_nearest_power_of_two(batch)
+    # batch = pad_graph_to_nearest_power_of_two(batch)
     compute_loss_fn = functools.partial(
         compute_loss, net=gcn_model, num_graphs=batch.num_graphs
     )
@@ -176,9 +171,8 @@ def train_step_no_jit(params, optimizer_state: optax.OptState, batch: Data):
     return params, optimizer_state, loss, acc
 
 
-
 # Benchmarking function
-def benchmark(train_step_fn, num_steps=50):
+def benchmark(train_step_fn, num_steps=100):
     start_time = time.time()
     for _ in range(num_steps):
         batch = next(train_reader)
@@ -187,13 +181,12 @@ def benchmark(train_step_fn, num_steps=50):
     return time.time() - start_time
 
 
-
 # Benchmark both versions
 jit_time = benchmark(train_step_jit)
-no_jit_time = benchmark(train_step_no_jit)
+# no_jit_time = benchmark(train_step_no_jit)
 
 print(f"JIT Time: {jit_time} seconds")
-print(f"Non-JIT Time: {no_jit_time} seconds")
+# print(f"Non-JIT Time: {no_jit_time} seconds")
 
 """
 CPU JIT Time: 47.3715717792511 seconds

@@ -134,7 +134,6 @@ def _batch(graphs: Sequence[Data]):
 
 
 class Batch(Data):
-
     def _add_to_batch(self, graph: Data):
         """
         Returns a new Batch instance with the single graph added. Does not modify the current object.
@@ -161,15 +160,17 @@ class Batch(Data):
         )
 
         # Create a new Batch object with the updated values
-        new_batch_obj = Batch(new_x, new_senders, new_receivers, new_edge_attr, new_glob, new_batch)
+        new_batch_obj = Batch(
+            new_x, new_senders, new_receivers, new_edge_attr, new_glob, new_batch
+        )
         return new_batch_obj
 
     def __init__(self, x, senders, receivers, edge_attr, glob, batch):
         super().__init__(x, senders, receivers, edge_attr, None, glob)  # TODO fix
         self.batch = batch
 
-        # When using jax.jit, `self.num_graphs` is treated as a dynamic value to trace. I think this is not optimal. 
-        self.num_graphs = self.compute_num_graphs() 
+        # When using jax.jit, `self.num_graphs` is treated as a dynamic value to trace. I think this is not optimal.
+        self.num_graphs = self.compute_num_graphs()
 
     @classmethod
     def from_data_list(cls, graphs: Sequence[Data]):
@@ -190,7 +191,7 @@ class Batch(Data):
             self.edge_attr,
             self.glob,
             self.batch,
-            ), None
+        ), None
 
     @classmethod
     def _tree_unflatten(cls, aux_data, children):

@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 
-from data import Data
-from gnn import GCNLayer
+from jeometric.data import Data
+from jeometric.gnn import GCNLayer
 import numpy as np
 
 
@@ -34,27 +34,19 @@ def _get_random_graph(max_n_graph=10):
     )
 
 
-# def get_gcnconv():
-#     return GCNConv(
-#         update_node_fn=lambda x: x,
-#         aggregate_nodes_fn="sum",
-#         add_self_edges=False,
-#         symmetric_normalization=True,
-#     )
-
-
 def get_gcnlayer():
     return GCNLayer(input_dim=4, output_dim=32, aggregate_nodes_fn="sum")
 
 
 if __name__ == "__main__":
     graph = _get_random_graph()
-    # apply_fn = get_gcnconv()
-    # print(apply_fn)
-    # print(apply_fn(graph))
 
     layer = get_gcnlayer()
-    params = layer.init(jax.random.PRNGKey(0), graph)
+    params = layer.init(
+        jax.random.PRNGKey(0), graph.x, graph.senders, graph.receivers, graph.num_nodes
+    )
 
-    out_graph = layer.apply(params, graph)
+    out_graph = layer.apply(
+        params, graph.x, graph.senders, graph.receivers, graph.num_nodes
+    )
     print(out_graph.shape)

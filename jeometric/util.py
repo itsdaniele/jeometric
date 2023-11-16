@@ -10,7 +10,27 @@ import jax
 import numpy as np
 
 
-def batch(graphs: Sequence[Data]) -> Data:
+def get_graph_padding_mask(padded_graph: Batch, num_graphs: int) -> jnp.array:
+    """Returns a mask for the graphs of a padded graph. For now, padded graphs only have 1 additional graph.
+
+    Args:
+      padded_graph: ``GraphsTuple`` padded using ``pad_with_graphs``.
+
+    Returns:
+      Boolean array of shape [total_num_graphs] containing True for real graphs,
+      and False for padding graphs.
+    """
+    n_padding_graph = 1
+    total_num_graphs = num_graphs
+    return _get_mask(padding_length=n_padding_graph, full_length=total_num_graphs)
+
+
+def _get_mask(padding_length, full_length):
+    valid_length = full_length - padding_length
+    return jnp.arange(full_length, dtype=jnp.int32) < valid_length
+
+
+def batch(graphs: Sequence[Data]) -> Batch:
     """Returns a batched graph given a list of graphs.
 
     This method will concatenate the ``nodes``, ``edges`` and ``globals``,
@@ -63,29 +83,10 @@ def batch(graphs: Sequence[Data]) -> Data:
       graphs: sequence of ``GraphsTuple``s which will be batched into a single
         graph.
     """
-    return _batch(graphs, np_=jnp)
+    return _batch(graphs)
 
 
-def _batch(graphs, np_):
-    """Returns batched graph given a list of graphs and a numpy-like module."""
-    # Calculates offsets for sender and receiver arrays, caused by concatenating
-    # the nodes arrays.
-    # offsets = np_.cumsum(np_.array([0] + [np_.sum(g.num_nodes) for g in graphs[:-1]]))
-
-    # def _map_concat(nests):
-    #     def concat(*args):
-    #         return np_.concatenate(args)
-
-    #     return tree.tree_map(concat, *nests)
-
-    # return Data(
-    #     x=_map_concat([g.x for g in graphs]),
-    #     edge_attr=_map_concat([g.edge_attr for g in graphs]),
-    #     glob=_map_concat([g.glob for g in graphs]),
-    #     senders=np_.concatenate([g.senders + o for g, o in zip(graphs, offsets)]),
-    #     receivers=np_.concatenate([g.receivers + o for g, o in zip(graphs, offsets)]),
-    # )
-
+def _batch(graphs):
     return Batch.from_data_list(graphs)
 
 
@@ -127,7 +128,7 @@ def pad_with_graph(graphs: Batch, n_node: int, n_edge: int) -> Batch:
     graph.glob = graphs.glob
     # TODO device_get is not copying graphs.glob, which is a dict. Fix this.
 
-    pad_n_node = int(n_node - graph.num_nodes) 
+    pad_n_node = int(n_node - graph.num_nodes)
     pad_n_edge = int(n_edge - graph.num_edges)
     pad_n_graph = int(n_graph - graph.num_graphs)
     if pad_n_node <= 0 or pad_n_edge < 0 or pad_n_graph <= 0:
@@ -198,6 +199,6 @@ if __name__ == "__main__":
 
     print(batch)
     print(batch.num_edges)
-    pad_with_graphs(batch, 100, 200, 3)
+    pad_with_graph(batch, 100, 200, 3)
     print(batch)
     print(batch.num_edges)
