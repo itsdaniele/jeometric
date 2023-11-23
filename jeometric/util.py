@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import jax.numpy as jnp
 import jax.tree_util as tree
 
-
-from jeometric.data import Data, Batch
+import jeometric
 
 from typing import Sequence
 
@@ -10,15 +11,15 @@ import jax
 import numpy as np
 
 
-def get_graph_padding_mask(padded_graph: Batch, num_graphs: int) -> jnp.array:
+def get_graph_padding_mask(num_graphs: int) -> jnp.array:
     """Returns a mask for the graphs of a padded graph. For now, padded graphs only have 1 additional graph.
 
     Args:
-      padded_graph: ``GraphsTuple`` padded using ``pad_with_graphs``.
+      num_graphs: number of graphs in ``Batch`` padded using ``pad_with_graph``.
 
     Returns:
       Boolean array of shape [total_num_graphs] containing True for real graphs,
-      and False for padding graphs.
+      and False for padding graph.
     """
     n_padding_graph = 1
     total_num_graphs = num_graphs
@@ -30,88 +31,88 @@ def _get_mask(padding_length, full_length):
     return jnp.arange(full_length, dtype=jnp.int32) < valid_length
 
 
-def batch(graphs: Sequence[Data]) -> Batch:
+def batch(graphs: Sequence[jeometric.data.Data]) -> jeometric.data.Batch:  # TODO test
     """Returns a batched graph given a list of graphs.
 
-    This method will concatenate the ``nodes``, ``edges`` and ``globals``,
-    ``n_node`` and ``n_edge`` of a sequence of ``GraphsTuple`` along axis 0. For
-    ``senders`` and ``receivers``, offsets are computed so that connectivity
-    remains valid for the new node indices.
-
-    For example::
-
-      key = jax.random.PRNGKey(0)
-      graph_1 = GraphsTuple(nodes=jax.random.normal(key, (3, 64)),
-                        edges=jax.random.normal(key, (5, 64)),
-                        senders=jnp.array([0,0,1,1,2]),
-                        receivers=[1,2,0,2,1],
-                        n_node=jnp.array([3]),
-                        n_edge=jnp.array([5]),
-                        globals=jax.random.normal(key, (1, 64)))
-      graph_2 = GraphsTuple(nodes=jax.random.normal(key, (5, 64)),
-                        edges=jax.random.normal(key, (10, 64)),
-                        senders=jnp.array([0,0,1,1,2,2,3,3,4,4]),
-                        receivers=jnp.array([1,2,0,2,1,0,2,1,3,2]),
-                        n_node=jnp.array([5]),
-                        n_edge=jnp.array([10]),
-                        globals=jax.random.normal(key, (1, 64)))
-      batch = graph.batch([graph_1, graph_2])
-
-      batch.nodes.shape
-      >> (8, 64)
-      batch.edges.shape
-      >> (15, 64)
-      # Offsets computed on senders and receivers
-      batch.senders
-      >> DeviceArray([0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7], dtype=int32)
-      batch.receivers
-      >> DeviceArray([1, 2, 0, 2, 1, 4, 5, 3, 5, 4, 3, 5, 4, 6, 5], dtype=int32)
-      batch.n_node
-      >> DeviceArray([3, 5], dtype=int32)
-      batch.n_edge
-      >> DeviceArray([5, 10], dtype=int32)
-
-    If a ``GraphsTuple`` does not contain any graphs, it will be dropped from the
-    batch.
-
-    This method is not compilable because it is data dependent.
-
-    This functionality was implementation as  ``utils_tf.concat`` in the
-    Tensorflow version of graph_nets.
+    This method wraps `_batch`.
 
     Args:
       graphs: sequence of ``GraphsTuple``s which will be batched into a single
         graph.
     """
-    return _batch(graphs)
+    from jeometric.data import Batch
+
+    return Batch(*_batch(graphs))
 
 
-def _batch(graphs):
-    return Batch.from_data_list(graphs)
+def _batch(graphs: Sequence[jeometric.data.Data]):
+    """
+    Returns batched graph given a list of graphs.
+    This function will concatenate the ``x``, ``senders``, ``receivers``, ``edge_attr``, ``y`` and ``globals``.
+
+    For ``senders`` and ``receivers``, offsets are computed so that connectivity
+    remains valid for the new node indices.
+
+    A ``batch`` array is also created, which maps each node to its graph index.
 
 
-def pad_with_graph(graphs: Batch, n_node: int, n_edge: int) -> Batch:
-    """Pads a ``Batch`` to size by adding computation preserving graphs.
+    Adapated from https://github.com/google-deepmind/jraph/blob/master/jraph/_src/utils.py#L424
+    """
+    # Calculates offsets for sender and receiver arrays, caused by concatenating
+    # the nodes arrays.
+    offsets = jnp.cumsum(jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]]))
 
-    The ``Batch`` is padded by first adding a dummy graph which contains the
-    padding nodes and edges, and then empty graphs without nodes or edges.
+    def _map_concat(nests):
+        def concat(*args):
+            return jnp.concatenate(args)
 
-    The empty graphs and the dummy graph do not interfer with the graphnet
-    calculations on the original graph, and so are computation preserving.
+        return tree.tree_map(concat, *nests)
 
-    The padding graph requires at least one node and one graph.
+    def _map_concat_dict(nests):
+        def concat_dict(*args):
+            return {k: jnp.concatenate([a[k] for a in args]) for k in args[0].keys()}
+
+        return tree.tree_map(concat_dict, *nests)
+
+    x = _map_concat([g.x for g in graphs])
+    senders = jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)])
+    receivers = jnp.concatenate([g.receivers + o for g, o in zip(graphs, offsets)])
+    y = _map_concat([g.y for g in graphs])
+    edge_attr = _map_concat([g.edge_attr for g in graphs])
+    glob = _map_concat_dict(
+        [g.glob for g in graphs]
+    )  # TODO fix concatenation as this is a dict
+
+    # self.batch should contain indices that map nodes to graph indices. They should be integers.
+    batch = jnp.concatenate(
+        [jnp.ones(g.num_nodes, dtype=jnp.int32) * i for i, g in enumerate(graphs)]
+    )
+
+    return x, senders, receivers, edge_attr, y, glob, batch
+
+
+def pad_with_graph(
+    graphs: jeometric.data.Batch, n_node: int, n_edge: int
+) -> jeometric.data.Batch:
+    """Adapted from https://github.com/google-deepmind/jraph.
+
+    Pads a ``Batch`` to size by adding a single computation preserving graph.
+
+    The ``Batch`` is padded by adding a dummy graph which contains the
+    padding nodes and edges.
+
+    The dummy graph do not interfer with the graphnet
+    calculations on the original graph, and so is computation preserving.
+
+    The padding graph requires at least one node.
 
     This function does not support jax.jit, because the shape of the output
     is data-dependent.
 
     Args:
-      graph: ``Batch`` padded with dummy graph and empty graphs.
+      graphs: ``Batch`` to be padded with dummy graph.
       n_node: the number of nodes in the padded ``Batch``.
       n_edge: the number of edges in the padded ``Batch``.
-      n_graph: the number of graphs in the padded ``Batch``. Default is 2,
-        which is the lowest possible value, because we always have at least one
-        graph in the original ``GraphsTuple`` and we need one dummy graph for the
-        padding.
 
     Raises:
       ValueError: if the passed ``n_graph`` is smaller than 2.
@@ -122,7 +123,7 @@ def pad_with_graph(graphs: Batch, n_node: int, n_edge: int) -> Batch:
       A padded ``Batch``.
     """
 
-    assert type(graphs) == Batch, "graphs must be a Batch object"
+    assert type(graphs) == jeometric.data.Batch, "graphs must be a Batch object"
     n_graph = graphs.num_graphs + 1
     graph = jax.device_get(graphs)
     graph.glob = graphs.glob
@@ -147,7 +148,7 @@ def pad_with_graph(graphs: Batch, n_node: int, n_edge: int) -> Batch:
     def tree_globs_pad(leaf):
         return np.zeros(1)
 
-    graph = Data(
+    graph = jeometric.data.Data(
         x=tree.tree_map(tree_nodes_pad, graph.x),
         edge_attr=tree.tree_map(tree_edges_pad, graph.edge_attr),
         senders=jnp.zeros(pad_n_edge, dtype=jnp.int32),
@@ -157,48 +158,3 @@ def pad_with_graph(graphs: Batch, n_node: int, n_edge: int) -> Batch:
 
     batch = graphs._add_to_batch(graph)
     return batch
-
-
-if __name__ == "__main__":
-
-    def _get_random_graph(max_n_graph=10):
-        n_graph = np.random.randint(1, max_n_graph + 1)
-        n_node = np.random.randint(0, 10, n_graph)
-        n_edge = np.random.randint(0, 20, n_graph)
-        # We cannot have any edges if there are no nodes.
-        n_edge[n_node == 0] = 0
-
-        senders = []
-        receivers = []
-        offset = 0
-        for n_node_in_graph, n_edge_in_graph in zip(n_node, n_edge):
-            if n_edge_in_graph != 0:
-                senders += list(
-                    np.random.randint(0, n_node_in_graph, n_edge_in_graph) + offset
-                )
-                receivers += list(
-                    np.random.randint(0, n_node_in_graph, n_edge_in_graph) + offset
-                )
-            offset += n_node_in_graph
-
-        return Data(
-            x=jnp.asarray(np.random.random(size=(np.sum(n_node), 4))),
-            edge_attr=jnp.asarray(np.random.random(size=(np.sum(n_edge), 3))),
-            senders=jnp.asarray(senders),
-            receivers=jnp.asarray(receivers),
-        )
-
-    graph1 = _get_random_graph()
-    graph2 = _get_random_graph()
-    graph3 = _get_random_graph()
-    batch = Batch([graph1, graph2])
-    # print(batch)
-    # batch._add_to_batch(graph3)
-    # print(graph3)
-    # print(batch)
-
-    print(batch)
-    print(batch.num_edges)
-    pad_with_graph(batch, 100, 200, 3)
-    print(batch)
-    print(batch.num_edges)

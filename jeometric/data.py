@@ -1,8 +1,9 @@
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Dict, Any
+
 import jax.numpy as jnp
 import jax
 
-import jax.tree_util as tree
+from jeometric.util import _batch
 
 OptTensor = Optional[jnp.ndarray]
 
@@ -13,11 +14,12 @@ class Data:
 
     Args:
         x: Node features.
-        senders: Indices of the sender nodes.
-        receivers: Indices of the receiver nodes.
-        edge_attr: Edge features.
+        senders: Sender indices.
+        receivers: Receiver indices.
+        edge_attr: Edge attributes.
         y: Target values.
-        glob: Global features.
+        glob: Global attributes.
+
     """
 
     def __init__(
@@ -27,8 +29,7 @@ class Data:
         receivers: OptTensor = None,
         edge_attr: OptTensor = None,
         y: OptTensor = None,
-        glob: OptTensor = None,
-        **kwargs,
+        glob: Dict[str, Any] = None,
     ):
         super().__init__()
         self._x = x
@@ -49,6 +50,10 @@ class Data:
     @property
     def y(self) -> jnp.ndarray:
         return self._y
+
+    @y.setter
+    def y(self, y):
+        self._y = y
 
     @property
     def edge_attr(self) -> jnp.ndarray:
@@ -88,7 +93,7 @@ class Data:
             self.senders,
             self.receivers,
             self.edge_attr,
-            None,
+            self.y,
             self.glob,
         ), None
 
@@ -103,48 +108,23 @@ class Data:
         return info
 
 
-def _batch(graphs: Sequence[Data]):
-    """
-    Returns batched graph given a list of graphs.
-    Adapated from https://github.com/google-deepmind/jraph/blob/master/jraph/_src/utils.py#L424
-    """
-    # Calculates offsets for sender and receiver arrays, caused by concatenating
-    # the nodes arrays.
-    offsets = jnp.cumsum(jnp.array([0] + [jnp.sum(g.num_nodes) for g in graphs[:-1]]))
-
-    def _map_concat(nests):
-        def concat(*args):
-            return jnp.concatenate(args)
-
-        return tree.tree_map(concat, *nests)
-
-    x = _map_concat([g.x for g in graphs])
-    edge_attr = _map_concat([g.edge_attr for g in graphs])
-    glob = _map_concat([g.glob for g in graphs])
-    senders = jnp.concatenate([g.senders + o for g, o in zip(graphs, offsets)])
-
-    receivers = jnp.concatenate([g.receivers + o for g, o in zip(graphs, offsets)])
-
-    # self.batch should contain indices that map nodes to graph indices. They should be integers.
-    batch = jnp.concatenate(
-        [jnp.ones(g.num_nodes, dtype=jnp.int32) * i for i, g in enumerate(graphs)]
-    )
-
-    return x, senders, receivers, edge_attr, glob, batch
-
-
 class Batch(Data):
     def _add_to_batch(self, graph: Data):
         """
-        Returns a new Batch instance with the single graph added. Does not modify the current object.
+        Returns a new Batch instance with a single graph added. Does not modify the current object.
         """
         offset = jnp.sum(self.x.shape[0])
         new_x = jnp.concatenate([self.x, graph.x])
+
+        new_senders = jnp.concatenate([self.senders, graph.senders + offset])
+        new_receivers = jnp.concatenate([self.receivers, graph.receivers + offset])
         new_edge_attr = (
             None
             if self.edge_attr is None
             else jnp.concatenate([self.edge_attr, graph.edge_attr])
         )
+
+        new_y = None if self.y is None else jnp.concatenate([self.y, graph.y])
 
         new_glob = (
             None
@@ -152,21 +132,27 @@ class Batch(Data):
             else {k: jnp.concatenate([v, graph.glob[k]]) for k, v in self.glob.items()}
         )
 
-        new_senders = jnp.concatenate([self.senders, graph.senders + offset])
-        new_receivers = jnp.concatenate([self.receivers, graph.receivers + offset])
-
         new_batch = jnp.concatenate(
             [self.batch, jnp.ones(graph.num_nodes, dtype=jnp.int32) * self.num_graphs]
         )
 
         # Create a new Batch object with the updated values
         new_batch_obj = Batch(
-            new_x, new_senders, new_receivers, new_edge_attr, new_glob, new_batch
+            new_x, new_senders, new_receivers, new_edge_attr, new_y, new_glob, new_batch
         )
         return new_batch_obj
 
-    def __init__(self, x, senders, receivers, edge_attr, glob, batch):
-        super().__init__(x, senders, receivers, edge_attr, None, glob)  # TODO fix
+    def __init__(
+        self,
+        x: OptTensor = None,
+        senders: OptTensor = None,
+        receivers: OptTensor = None,
+        edge_attr: OptTensor = None,
+        y: OptTensor = None,
+        glob: Optional[Dict[str, Any]] = None,
+        batch: OptTensor = None,
+    ):
+        super().__init__(x, senders, receivers, edge_attr, y, glob)
         self.batch = batch
 
         # When using jax.jit, `self.num_graphs` is treated as a dynamic value to trace. I think this is not optimal.
@@ -177,8 +163,8 @@ class Batch(Data):
         """
         Returns a `Batch` instance from a list of `Data` instances.
         """
-        x, senders, receivers, edge_attr, glob, batch = _batch(graphs)
-        return cls(x, senders, receivers, edge_attr, glob, batch)
+        x, senders, receivers, edge_attr, y, glob, batch = _batch(graphs)
+        return cls(x, senders, receivers, edge_attr, y, glob, batch)
 
     def _tree_flatten(self):
         """
@@ -189,6 +175,7 @@ class Batch(Data):
             self.senders,
             self.receivers,
             self.edge_attr,
+            self.y,
             self.glob,
             self.batch,
         ), None
@@ -202,21 +189,3 @@ class Batch(Data):
 
     def compute_num_graphs(self):
         return jnp.max(self.batch) + 1
-
-
-if __name__ == "__main__":
-    seed = 42
-    key = jax.random.PRNGKey(seed)
-    x = jax.random.normal(key, shape=(10, 100))
-    senders = jnp.array(list(range(10)))
-    receivers = jnp.array(list(range(10)))
-    graph = Data(x=x, senders=senders, receiver=receivers)
-
-    x2 = x.copy()
-    senders2 = senders.copy()
-    receivers2 = receivers.copy()
-    graph2 = Data(x=x2, senders=senders2, receiver=receivers2)
-
-    batch = Batch.from_data_list([graph, graph2])
-
-    print(graph)

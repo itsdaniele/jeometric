@@ -56,7 +56,7 @@ def pad_graph_to_nearest_power_of_two(batch: Batch):
     return pad_with_graph(batch, pad_nodes_to, pad_edges_to)
 
 
-def compute_loss(params, graph, label, net, num_graphs):
+def compute_loss(params, graph, label, net, num_graphs, pad):
     """Computes loss."""
     pred_graph = net.apply(params, graph, num_graphs)
     preds = jax.nn.log_softmax(pred_graph)
@@ -66,10 +66,14 @@ def compute_loss(params, graph, label, net, num_graphs):
     # to mask out any loss associated with the dummy graph.
     # Since we padded with `pad_with_graphs` we can recover the mask by using
     # get_graph_padding_mask.
-    mask = get_graph_padding_mask(pred_graph, num_graphs)
 
-    # Cross entropy loss.
-    loss = -jnp.sum(preds * targets * mask[:, None]) / num_graphs
+    if pad:
+        mask = get_graph_padding_mask(pred_graph, num_graphs)
+
+        # Cross entropy loss.
+        loss = -jnp.sum(preds * targets * mask[:, None]) / num_graphs
+    else:
+        loss = -jnp.sum(preds * targets) / num_graphs
 
     accuracy = jnp.mean(jnp.argmax(preds, axis=1) == label)
     return loss, accuracy
@@ -147,13 +151,19 @@ optimizer_state = optimizer.init(params)
 
 
 # JIT-compiled version of train_step
-def train_step_jit(params, optimizer_state: optax.OptState, batch: Data):
-    # batch = pad_graph_to_nearest_power_of_two(batch)
+def train_step_jit(
+    pad,
+    params,
+    optimizer_state: optax.OptState,
+    batch: Data,
+):
+    if pad:
+        batch = pad_graph_to_nearest_power_of_two(batch)
     compute_loss_fn = functools.partial(
         compute_loss, net=gcn_model, num_graphs=batch.num_graphs
     )
     compute_loss_fn = jax.jit(jax.value_and_grad(compute_loss_fn, has_aux=True))
-    (loss, acc), grad = compute_loss_fn(params, batch, batch.glob["label"])
+    (loss, acc), grad = compute_loss_fn(params, batch, batch.glob["label"], pad=pad)
     updates, optimizer_state = optimizer.update(grad, optimizer_state)
     params = optax.apply_updates(params, updates)
     return params, optimizer_state, loss, acc
@@ -172,7 +182,7 @@ def train_step_no_jit(params, optimizer_state: optax.OptState, batch: Data):
 
 
 # Benchmarking function
-def benchmark(train_step_fn, num_steps=100):
+def benchmark(train_step_fn, num_steps=500):
     start_time = time.time()
     for _ in range(num_steps):
         batch = next(train_reader)
@@ -182,10 +192,12 @@ def benchmark(train_step_fn, num_steps=100):
 
 
 # Benchmark both versions
-jit_time = benchmark(train_step_jit)
+jit_time_pad = benchmark(functools.partial(train_step_jit, True))
+jit_time_nopad = benchmark(functools.partial(train_step_jit, False))
 # no_jit_time = benchmark(train_step_no_jit)
 
-print(f"JIT Time: {jit_time} seconds")
+print(f"JIT Time PAD: {jit_time_pad} seconds")
+print(f"JIT Time NO PAD: {jit_time_nopad} seconds")
 # print(f"Non-JIT Time: {no_jit_time} seconds")
 
 """
