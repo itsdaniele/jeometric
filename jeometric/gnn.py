@@ -116,3 +116,6 @@ class GCNLayer(nn.Module):
         )
 
         return _gcn_conv(x, senders, receivers)
+
+    def __str__(self):
+        return f"GCNLayer({self.input_dim}, {self.output_dim})"

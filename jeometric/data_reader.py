@@ -135,27 +135,3 @@ class DataReader:
             graph = self.get_graph_by_idx(idx)
             idx += 1
             yield graph
-
-
-if __name__ == "__main__":
-    path = "/Users/danielepaliotta/Desktop/phd/projects/jax-geometric/jeometric/jeometric/ogbg-molhiv"
-    reader = DataReader(
-        data_path=path,
-        master_csv_path=path + "/master.csv",
-        split_path=path + "/train.csv.gz",
-        batch_size=32,
-    )
-
-    # reader.repeat()
-    print(reader.total_num_graphs)
-    print(next(iter(reader)))
-
-    reader_test = DataReader(
-        data_path=path,
-        master_csv_path=path + "/master.csv",
-        split_path=path + "/test.csv.gz",
-        batch_size=32,
-    )
-
-    print(reader.total_num_graphs)
-    print(next(iter(reader)))

@@ -20,6 +20,13 @@ tree_util.register_pytree_node(Data, Data._tree_flatten, Data._tree_unflatten)
 tree_util.register_pytree_node(Batch, Batch._tree_flatten, Batch._tree_unflatten)
 
 
+DATA_PATH = "./ogbg-molhiv"
+BATCH_SIZE = 1
+INPUT_DIM = 9
+HIDDEN_DIMS = [64, 128]
+OUTPUT_DIM = 2
+
+
 def _nearest_bigger_power_of_two(x: int) -> int:
     """Computes the nearest power of two greater than x for padding."""
     y = 2
@@ -55,7 +62,7 @@ def pad_graph_to_nearest_power_of_two(batch: Batch):
     pad_edges_to = _nearest_bigger_power_of_two(batch.num_edges)
     # Add 1 since we need at least one padding graph for pad_with_graphs.
     # We do not pad to nearest power of two because the batch size is fixed.
-    return pad_with_graph(batch, pad_nodes_to, pad_edges_to)
+    return pad_with_graph(batch, pad_nodes_to, pad_edges_to, task="graph")
 
 
 def compute_loss(params, graph, label, net, num_graphs):
@@ -68,7 +75,7 @@ def compute_loss(params, graph, label, net, num_graphs):
     # to mask out any loss associated with the dummy graph.
     # Since we padded with `pad_with_graphs` we can recover the mask by using
     # get_graph_padding_mask.
-    mask = get_graph_padding_mask(graph)
+    mask = get_graph_padding_mask(num_graphs)
 
     # Cross entropy loss.
     loss = -jnp.sum(preds * targets * mask[:, None]) / num_graphs
@@ -86,7 +93,6 @@ class GraphConvolutionalNetwork(nn.Module):
     @nn.compact
     def __call__(self, graph: Data, num_graphs: int) -> Data:
         x, senders, receivers = graph.x, graph.senders, graph.receivers
-        n_node = graph.num_nodes
         current_input_dim = self.input_dim
         for dim in self.hidden_dims:
             x = GCNLayer(
@@ -94,7 +100,7 @@ class GraphConvolutionalNetwork(nn.Module):
                 output_dim=dim,
                 add_self_edges=self.add_self_edges,
                 symmetric_normalization=self.symmetric_normalization,
-            )(x, senders, receivers, n_node)
+            )(x, senders, receivers)
             x = jax.nn.relu(x)
             current_input_dim = dim
 
@@ -103,39 +109,38 @@ class GraphConvolutionalNetwork(nn.Module):
             output_dim=self.output_dim,
             add_self_edges=self.add_self_edges,
             symmetric_normalization=self.symmetric_normalization,
-        )(x, senders, receivers, n_node)
+        )(x, senders, receivers)
         x = jax.ops.segment_sum(x, graph.batch, num_graphs)
         return x
 
 
-# Example settings
-batch_size = 1
-input_dim = 9
-hidden_dims = [64, 128]
-output_dim = 2
-
 gcn_model = GraphConvolutionalNetwork(
-    input_dim=input_dim,
-    hidden_dims=hidden_dims,
-    output_dim=output_dim,
-    aggregate_nodes_fn="sum",
+    input_dim=INPUT_DIM,
+    hidden_dims=HIDDEN_DIMS,
+    output_dim=OUTPUT_DIM,
     add_self_edges=True,
     symmetric_normalization=True,
 )
 
-# Initialize model parameters
+
 key = jax.random.PRNGKey(0)
-path = "/home/paliotta/jeometric/jeometric/ogbg-molhiv"
+
 train_reader = DataReader(
-    data_path=path,
-    master_csv_path=path + "/master.csv",
-    split_path=path + "/train.csv.gz",
+    data_path=DATA_PATH,
+    master_csv_path=DATA_PATH + "/master.csv",
+    split_path=DATA_PATH + "/train.csv.gz",
+    batch_size=BATCH_SIZE,
+)
+
+test_reader = DataReader(
+    data_path=DATA_PATH,
+    master_csv_path=DATA_PATH + "/master.csv",
+    split_path=DATA_PATH + "/test.csv.gz",
     batch_size=1,
 )
 
-params = gcn_model.init(key, next(iter(train_reader)), 32)
 
-# Initialize optimizer
+params = gcn_model.init(key, next(iter(train_reader)), num_graphs=1)
 optimizer = optax.adam(learning_rate=1e-3)
 optimizer_state = optimizer.init(params)
 
@@ -170,14 +175,6 @@ def evaluate(data_reader):
         accuracy += accuracy_
         num_batches += 1
     return loss / num_batches, accuracy / num_batches
-
-
-test_reader = DataReader(
-    data_path=path,
-    master_csv_path=path + "/master.csv",
-    split_path=path + "/test.csv.gz",
-    batch_size=1,
-)
 
 
 train_reader.repeat()

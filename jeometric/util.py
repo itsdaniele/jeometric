@@ -92,7 +92,7 @@ def _batch(graphs: Sequence[jeometric.data.Data]):
 
 
 def pad_with_graph(
-    graphs: jeometric.data.Batch, n_node: int, n_edge: int
+    graphs: jeometric.data.Batch, n_node: int, n_edge: int, task: str = "node"
 ) -> jeometric.data.Batch:
     """Adapted from https://github.com/google-deepmind/jraph.
 
@@ -104,7 +104,11 @@ def pad_with_graph(
     The dummy graph do not interfer with the graphnet
     calculations on the original graph, and so is computation preserving.
 
+
     The padding graph requires at least one node.
+
+    If task is "node", the dummy graph ``y`` will have shape [n_node, 1].
+    If task is "graph", the dummy graph ``y`` will have shape [1,].
 
     This function does not support jax.jit, because the shape of the output
     is data-dependent.
@@ -124,6 +128,7 @@ def pad_with_graph(
     """
 
     assert type(graphs) == jeometric.data.Batch, "graphs must be a Batch object"
+    assert task in ["node", "graph"], "task must be either 'node' or 'graph'"
     n_graph = graphs.num_graphs + 1
     graph = jax.device_get(graphs)
     graph.glob = graphs.glob
@@ -144,6 +149,12 @@ def pad_with_graph(
     def tree_edges_pad(leaf):
         return np.zeros((pad_n_edge,) + leaf.shape[1:], dtype=leaf.dtype)
 
+    def tree_y_pad(leaf):
+        if task == "node":
+            return np.zeros((pad_n_node, 1), dtype=leaf.dtype)
+        elif task == "graph":
+            return np.zeros((1,), dtype=leaf.dtype)
+
     # for globs, leaf is a dict. we want to create zero-value dicts with the same keys
     def tree_globs_pad(leaf):
         return np.zeros(1)
@@ -153,6 +164,7 @@ def pad_with_graph(
         edge_attr=tree.tree_map(tree_edges_pad, graph.edge_attr),
         senders=jnp.zeros(pad_n_edge, dtype=jnp.int32),
         receivers=jnp.zeros(pad_n_edge, dtype=jnp.int32),
+        y=tree.tree_map(tree_y_pad, graph.y),
         glob=tree.tree_map(tree_globs_pad, graph.glob),
     )
 
