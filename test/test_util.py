@@ -51,11 +51,11 @@ def test_pad_with_graph():
     graph2 = _get_random_graph()
     batch = Batch.from_data_list([graph1, graph2])
 
-    padded_batch = pad_with_graph(batch, 100, 200)
-    assert padded_batch.num_nodes == 100
-    assert padded_batch.num_edges == 200
+    padded_batch = pad_with_graph(batch, 300, 400)
+    assert padded_batch.num_nodes == 300
+    assert padded_batch.num_edges == 400
     assert padded_batch.num_graphs == 3
-    assert padded_batch.senders.shape == (200,)
-    assert padded_batch.receivers.shape == (200,)
-    assert padded_batch.batch.shape == (100,)
+    assert padded_batch.senders.shape == (400,)
+    assert padded_batch.receivers.shape == (400,)
+    assert padded_batch.batch.shape == (300,)
     assert padded_batch.batch[0] == 0
