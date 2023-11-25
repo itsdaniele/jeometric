@@ -1,42 +1,38 @@
+import jax
 import jax.numpy as jnp
 import jax.tree_util as tree
-import jax
+
+from flax import linen as nn
 
 from typing import Callable, Dict
 
 from jeometric.ops import segment_sum
-from jeometric.data import Data
-
-from flax import linen as nn
 
 
 NodeFeatures = EdgeFeatures = Globals = jnp.ndarray
-AggregateEdgesToNodesFn = Callable[[EdgeFeatures, jnp.ndarray, int], NodeFeatures]
+AggregateNodesToGlobalsFn = Callable[[NodeFeatures, jnp.ndarray, int], NodeFeatures]
 
-aggregate_fn_dict: Dict[str, AggregateEdgesToNodesFn] = {"sum": segment_sum}
+aggregate_fn_dict: Dict[str, AggregateNodesToGlobalsFn] = {"sum": segment_sum}
 
 
 def gcn_conv(
     update_node_fn: Callable[[NodeFeatures], NodeFeatures],
-    aggregate_nodes_fn: str = "sum",
+    aggregation_type: str = "sum",
     add_self_edges: bool = False,
     symmetric_normalization: bool = True,
 ):
     """
+    Adapted from https://github.com/google-deepmind/jraph/tree/master
     """
-    assert aggregate_nodes_fn in aggregate_fn_dict
-    aggregate_nodes_fn = aggregate_fn_dict[aggregate_nodes_fn]
 
-    def _apply(x: jnp.array, senders: jnp.array, receivers: jnp.array, n_node: int):
+    assert aggregation_type in aggregate_fn_dict
+    aggregate_nodes_fn = aggregate_fn_dict[aggregation_type]
+
+    def _apply(x: jnp.array, senders: jnp.array, receivers: jnp.array):
         x = update_node_fn(x)
         total_num_nodes = tree.tree_leaves(x)[0].shape[0]
 
         if add_self_edges:
-            # We add self edges to the senders and receivers so that each node
-            # includes itself in aggregation.
-            # In principle, a `GraphsTuple` should partition by n_edge, but in
-            # this case it is not required since a GCN is agnostic to whether
-            # the `GraphsTuple` is a batch of graphs or a single large graph.
             conv_receivers = jnp.concatenate(
                 (receivers, jnp.arange(total_num_nodes)), axis=0
             )
@@ -90,17 +86,18 @@ def gcn_conv(
 
 class GCNLayer(nn.Module):
     """
+    A single GCN layer.
     """
+
     input_dim: int
     output_dim: int
-    aggregate_nodes_fn: str = "sum"
     add_self_edges: bool = False
     symmetric_normalization: bool = True
 
     @nn.compact
     def __call__(
-        self, x: jnp.array, senders: jnp.array, receivers: jnp.array, n_node: int
-    ) -> jnp.array:
+        self, x: jnp.ndarray, senders: jnp.ndarray, receivers: jnp.ndarray
+    ) -> jnp.ndarray:
         weight = self.param(
             "weight",
             nn.initializers.xavier_uniform(),
@@ -113,9 +110,9 @@ class GCNLayer(nn.Module):
 
         _gcn_conv = gcn_conv(
             update_node_fn=update_node_fn,
-            aggregate_nodes_fn=self.aggregate_nodes_fn,
+            aggregation_type="sum",
             add_self_edges=self.add_self_edges,
             symmetric_normalization=self.symmetric_normalization,
         )
 
-        return _gcn_conv(x, senders, receivers, n_node)
+        return _gcn_conv(x, senders, receivers)

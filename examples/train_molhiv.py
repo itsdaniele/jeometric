@@ -29,7 +29,7 @@ def _nearest_bigger_power_of_two(x: int) -> int:
 
 
 def pad_graph_to_nearest_power_of_two(batch: Batch):
-    """Pads a batched `GraphsTuple` to the nearest power of two.
+    """Pads a`Batch` to the nearest power of two.
 
     For example, if a `GraphsTuple` has 7 nodes, 5 edges and 3 graphs, this method
     would pad the `GraphsTuple` nodes and edges:
@@ -65,7 +65,7 @@ def compute_loss(params, graph, label, net, num_graphs):
     # to mask out any loss associated with the dummy graph.
     # Since we padded with `pad_with_graphs` we can recover the mask by using
     # get_graph_padding_mask.
-    mask = get_graph_padding_mask(graph, num_graphs)
+    mask = get_graph_padding_mask(graph)
 
     # Cross entropy loss.
     loss = -jnp.sum(preds * targets * mask[:, None]) / num_graphs

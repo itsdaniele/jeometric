@@ -11,7 +11,7 @@ import jax
 import numpy as np
 
 
-def get_graph_padding_mask(num_graphs: int) -> jnp.array:
+def get_graph_padding_mask(num_graphs: int) -> jnp.ndarray:
     """Returns a mask for the graphs of a padded graph. For now, padded graphs only have 1 additional graph.
 
     Args:

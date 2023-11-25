@@ -1,7 +1,6 @@
 from typing import Optional, Sequence, Dict, Any
 
 import jax.numpy as jnp
-import jax
 
 from jeometric.util import _batch
 
@@ -10,15 +9,21 @@ OptTensor = Optional[jnp.ndarray]
 
 class Data:
     """
-    Data class for graphs.
+    Class for a homogeneous graph.
 
     Args:
-        x: Node features.
-        senders: Sender indices.
-        receivers: Receiver indices.
-        edge_attr: Edge attributes.
-        y: Target values.
-        glob: Global attributes.
+        - x: An ndarray containing the node features. The shape is `(num_nodes, num_node_features)`.
+
+        - senders: An ndarray containing the sender node indices for every edge. The shape is `(num_edges,)`.
+
+        - receivers: An ndarray containing the receiver node indices for every edge. The shape is `(num_edges,)`.
+
+        - edge_attr: An ndarray containing the edge features. The shape is `(num_edges, num_edge_features)`.
+
+        - y: An ndarray containing the labels. The shape depends on whether the task is node-level, edge-level or graph-level.
+        For node-level tasks, the shape is `(num_nodes, num_node_labels)`. For edge-level tasks, the shape is `(num_edges, num_edge_labels)`.
+
+        - glob: A dictionary containing global attributes. The keys are strings and the values are ndarrays. The shape of the values is `(num_graphs, num_global_features)`.
 
     """
 
@@ -29,18 +34,18 @@ class Data:
         receivers: OptTensor = None,
         edge_attr: OptTensor = None,
         y: OptTensor = None,
-        glob: Dict[str, Any] = None,
+        glob: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         self._x = x
         self._senders = senders
         self._receivers = receivers
         self._edge_attr = edge_attr
-        self._y = y  # this is never used by the rest of the library for now.
+        self._y = y
         self.glob = glob
 
     @property
-    def x(self) -> jnp.ndarray:
+    def x(self) -> OptTensor:
         return self._x
 
     @x.setter
@@ -48,7 +53,7 @@ class Data:
         self._x = x
 
     @property
-    def y(self) -> jnp.ndarray:
+    def y(self) -> OptTensor:
         return self._y
 
     @y.setter
@@ -56,7 +61,7 @@ class Data:
         self._y = y
 
     @property
-    def edge_attr(self) -> jnp.ndarray:
+    def edge_attr(self) -> OptTensor:
         return self._edge_attr
 
     @edge_attr.setter
@@ -64,11 +69,11 @@ class Data:
         self._edge_attr = edge_attr
 
     @property
-    def senders(self) -> jnp.ndarray:
+    def senders(self) -> OptTensor:
         return self._senders
 
     @property
-    def receivers(self) -> jnp.ndarray:
+    def receivers(self) -> OptTensor:
         return self._receivers
 
     @senders.setter
@@ -101,7 +106,7 @@ class Data:
     def _tree_unflatten(cls, aux_data, children):
         return cls(*children)
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         info = f"num_nodes: {self.num_nodes}"
         info += " | "
         info += f"x: {self.x.shape}"
@@ -109,9 +114,19 @@ class Data:
 
 
 class Batch(Data):
+    """
+    Class for a batch of homogeneous graphs. Inherits from `Data`. The single graphs are batched into a single, larger graph.
+
+    ``Batch`` object are very similar to ``Data`` objects,
+    but they have an additional attribute ``batch`` that maps each node to its corresponding graph in the batch.
+    """
+
     def _add_to_batch(self, graph: Data):
         """
         Returns a new Batch instance with a single graph added. Does not modify the current object.
+
+        Args:
+            - graph: A ``Data`` instance to be added to the batch.
         """
         offset = jnp.sum(self.x.shape[0])
         new_x = jnp.concatenate([self.x, graph.x])
@@ -187,5 +202,5 @@ class Batch(Data):
         """
         return cls(*children)
 
-    def compute_num_graphs(self):
+    def compute_num_graphs(self) -> int:
         return jnp.max(self.batch) + 1
