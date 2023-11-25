@@ -29,23 +29,26 @@ def _nearest_bigger_power_of_two(x: int) -> int:
 
 
 def pad_graph_to_nearest_power_of_two(batch: Batch):
-    """Pads a`Batch` to the nearest power of two.
+    """
+    Adapted from https://github.com/google-deepmind/jraph/tree/master.
 
-    For example, if a `GraphsTuple` has 7 nodes, 5 edges and 3 graphs, this method
+    Pads a `Batch` to the nearest power of two.
+
+    For example, if a `batch` has 7 nodes, 5 edges and 3 graphs, this method
     would pad the `GraphsTuple` nodes and edges:
       7 nodes --> 8 nodes (2^3)
       5 edges --> 8 edges (2^3)
 
-    And since padding is accomplished using `jraph.pad_with_graph`, an extra
+    And since padding is accomplished using `pad_with_graph`, an extra
     graph and node is added:
       8 nodes --> 9 nodes
       3 graphs --> 4 graphs
 
     Args:
-      graphs_tuple: a batched `GraphsTuple` (can be batch size 1).
+      - batch: a `Batch` (can be batch size 1).
 
     Returns:
-      A graphs_tuple batched to the nearest power of two.
+      A ``Batch`` object batched to the nearest power of two.
     """
     # Add 1 since we need at least one padding node for pad_with_graphs.
     pad_nodes_to = _nearest_bigger_power_of_two(batch.num_nodes) + 1
@@ -77,7 +80,6 @@ class GraphConvolutionalNetwork(nn.Module):
     input_dim: int
     hidden_dims: List[int]  # list of dimensions for each hidden layer
     output_dim: int
-    aggregate_nodes_fn: str = "sum"
     add_self_edges: bool = False
     symmetric_normalization: bool = (True,)
 
@@ -90,7 +92,6 @@ class GraphConvolutionalNetwork(nn.Module):
             x = GCNLayer(
                 input_dim=current_input_dim,
                 output_dim=dim,
-                aggregate_nodes_fn=self.aggregate_nodes_fn,
                 add_self_edges=self.add_self_edges,
                 symmetric_normalization=self.symmetric_normalization,
             )(x, senders, receivers, n_node)
@@ -100,20 +101,10 @@ class GraphConvolutionalNetwork(nn.Module):
         x = GCNLayer(
             input_dim=current_input_dim,
             output_dim=self.output_dim,
-            aggregate_nodes_fn=self.aggregate_nodes_fn,
             add_self_edges=self.add_self_edges,
             symmetric_normalization=self.symmetric_normalization,
         )(x, senders, receivers, n_node)
-
-        # Global average pooling. Graphs are batched so need to use scatter_add and such.
-        # x = jax.ops.segment_sum(x, graph.batch, graph.num_graphs)  # TODO fix
-
-        # the previous code doesn't work with jax.jit because of graph.num_graphs property. Fixing it with the following code
-        # x = jax.jit(jax.ops.segment_sum, static_argnums=(2,))(
-        #     x, graph.batch, graph.num_graphs
-        # )
         x = jax.ops.segment_sum(x, graph.batch, num_graphs)
-
         return x
 
 
@@ -160,7 +151,7 @@ def train_step(
         compute_loss, net=gcn_model, num_graphs=batch.num_graphs
     )
     compute_loss_fn = jax.jit(jax.value_and_grad(compute_loss_fn, has_aux=True))
-    (loss, acc), grad = compute_loss_fn(params, batch, batch.glob["label"])
+    (loss, acc), grad = compute_loss_fn(params, batch, batch.y)
     updates, optimizer_state = optimizer.update(grad, optimizer_state)
     params = optax.apply_updates(params, updates)
     return params, optimizer_state, loss, acc
@@ -173,7 +164,7 @@ def evaluate(data_reader):
     num_batches = 0
     for batch in iter(data_reader):
         loss_, accuracy_ = compute_loss(
-            params, batch, batch.glob["label"], gcn_model, batch.num_graphs
+            params, batch, batch.y, gcn_model, batch.num_graphs
         )
         loss += loss_
         accuracy += accuracy_

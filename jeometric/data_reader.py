@@ -114,7 +114,7 @@ class DataReader:
             edge_attr=np.concatenate([edges, edges]),
             senders=np.concatenate([senders, receivers]),
             receivers=np.concatenate([receivers, senders]),
-            glob={"label": label},
+            y=label,
         )
 
     def _make_generator(self):
