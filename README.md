@@ -90,7 +90,7 @@ class GraphConvolutionalNetwork(nn.Module):
 
 # Examples
 
-Some examples can be find in the `examples` directory.
+Some examples can be found in the `examples` directory.
 
 * `examples/train_molhiv.py` provides an example of training a graph convolutional network on `molhiv`.
-* `examples/benchmark_gcn_molhiv` provides code to benchmark the jit and non-jit version.
+* `examples/benchmark_gcn_molhiv.py` provides code to benchmark the jit and non-jit version.
