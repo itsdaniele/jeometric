@@ -184,10 +184,10 @@ def benchmark(train_step_fn, num_steps=100):
     return time.time() - start_time
 
 
-jit_time_pad = benchmark(train_step_jit)
+jit_time = benchmark(train_step_jit)
 no_jit_time = benchmark(train_step_no_jit)
 
-print(f"JIT Time: {jit_time_pad} seconds")
+print(f"JIT Time: {jit_time} seconds")
 print(f"Non-JIT Time: {no_jit_time} seconds")
 
 """
