@@ -11,7 +11,7 @@
 pip install jeometric
 ```
 
-NOTE: this library is still in the very early stages of development. Breaking changes might appear every other day ❤️.
+NOTE: this library is still in the very early stages of development. Breaking changes might appear every other day ❤️
 
 # Usage
 
